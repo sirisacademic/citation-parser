@@ -209,7 +209,7 @@ class CitationParser:
                         
         return candidates
 
-    def obtain_publication(self, citation, results='simple'):
+    def link_citation(self, citation, results='simple'):
 
         prescreening_style = self.prescreening_pipeline(citation)
         if prescreening_style[0]['label'] == 'False':  # Assuming the label structure
