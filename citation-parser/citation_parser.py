@@ -7,6 +7,9 @@ from datasets import Dataset
 from transformers.pipelines.pt_utils import KeyDataset
 import requests
 import string
+from googlesearch import search
+import re
+
 
 class CitationParser:
     def __init__(self, ner_model_path="SIRIS-Lab/citation-parser-ENTITY", select_model_path="SIRIS-Lab/citation-parser-SELECT",prescreening_model_path="SIRIS-Lab/citation-parser-TYPE", device="cpu"):
@@ -107,7 +110,7 @@ class CitationParser:
         if true_scores:
             pos =  max(true_scores, key=lambda x: x[1])[0]  # Return the index with the highest score
             return inputs[pos]
-        return {'result':None}
+        return None
     
     def search_api(self, ner_entities):
         """
@@ -128,6 +131,7 @@ class CitationParser:
             "volume": ner_entities.get("VOLUME", [None])[0],
             "issue": ner_entities.get("ISSUE", [None])[0],
             "year": ner_entities.get("PUBLICATION_YEAR", [None])[0],
+            "doi": ner_entities.get("DOI", [None])[0].replace("https://doi.org/", "").replace(' ','') if ner_entities.get("DOI") else None,
             "author": ner_entities.get("AUTHORS", [None])[0].split(" ")[0].strip() if ner_entities.get("AUTHORS") else None
         }
 
@@ -139,29 +143,43 @@ class CitationParser:
             if len(journals) == 1:
                 fields["journal"] = journals[0]["id"].split("/")[-1]
             else:
-                fields["journal"] = None
+                res = search(fields['journal']+" journal", num_results=1,advanced=True)
+                try:
+                    expanded_version = [re.split(r'[-:]', i.title.title().replace('The', ''))[0].strip() for i in res][0]
+                    response = requests.get(f"{source_url}?filter=display_name.search:{expanded_version}")
+                    journals = response.json().get("results", [])
+                    if len(journals) == 1:
+                        fields["journal"] = journals[0]["id"].split("/")[-1]
+                    else:
+                        fields["journal"] = None
+                except:
+                    fields["journal"] = None
 
         # Define field combinations for the search
         field_combinations = [
+                ['doi'],
                 ["title", "year"],
                 ["title"],
+                ["title", "year", "author"],
                 ["title", "year", "author", "journal", "first_page", "last_page", "volume", "issue"],
                 ["title", "year", "author", "journal", "first_page", "last_page", "volume"],
                 ["title", "year", "author", "first_page", "last_page", "volume"],
                 ["title", "year", "author", "journal", "volume", "issue"],
-                ["year", "author","first_page", "last_page"],
                 ["title", "year", "author", "journal"],
-                ["title", "year", "author"],
+                ["year", "author","first_page", "last_page"],
+                ["year", "author","journal","volume"],
+                ["year","journal","volume","first_page"],
             ]
+        
 
         # Filter field combinations based on available fields
         filtered_combinations = self.filter_field_combinations(fields, field_combinations)
         
-        if 'title' in fields.keys():
+        if 'title' in [key for key, value in fields.items() if value is not None]:# in not null keys
             filtered_combinations.append(["title-half","year"])
             filtered_combinations.append(["title-half"])
+
         candidates = []
-        
 
         for combination in filtered_combinations:
             # Build query parameters dynamically based on available fields
@@ -172,6 +190,10 @@ class CitationParser:
                 if value:
                     if field == "title":
                         query_params.append(f"title.search:{value}")
+                    
+                    if field == "doi":
+                        query_params.append(f"doi:{value}")
+
                     if field == "title-half":
                         words = value.split()
                         mid_point = len(words) // 2
@@ -179,33 +201,36 @@ class CitationParser:
                         second_half = " ".join(words[mid_point:])
                         query_params.append(f"title.search:{first_half}|{second_half}")
                         
-                    elif field == "author":
-                        query_params.append(f"raw_author_name.search:{value.split()[0]}")
-                    elif field == "year":
+                    if field == "author":
+                        query_params.append(f"raw_author_name.search:{value}")
+                    if field == "year":
                         query_params.append(f"publication_year:{value}")
-                    elif field == "journal":
+                    if field == "journal":
                         query_params.append(f"locations.source.id:{value}")
-                    elif field == "first_page":
+                    if field == "first_page":
                         query_params.append(f"biblio.first_page:{value}")
-                    elif field == "last_page":
+                    if field == "last_page":
                         query_params.append(f"biblio.last_page:{value}")
-                    elif field == "volume":
+                    if field == "volume":
                         query_params.append(f"biblio.volume:{value}")
-                    elif field == "issue":
+                    if field == "issue":
                         query_params.append(f"biblio.issue:{value}")
 
             # Combine query parameters
             query_string = ",".join(query_params)
-            api_url = f"{base_url}?filter={query_string}"
+            api_url = f"{base_url}?filter={query_string}".replace(',,',',')
 
             # Make the API call
             response = requests.get(api_url)
             if response.status_code == 200:
                 results = response.json().get("results", [])
+
+                candidates+=results
                 if len(results)==1:  # Return results if found
                     return results
-                else:
-                    candidates+=results
+                
+                if len(candidates)>1:
+                    return candidates
                         
         return candidates
 
@@ -228,19 +253,21 @@ class CitationParser:
                 if results=='advanced':
                     return {'result':cits[0], 'score':pairwise[0][0]['score'], 'full-publication':pubs[0]}
             else:
-                return print('Implement flexible search')
+                if results=='simple':
+                    return {'result':cits[0], 'score':False,'id':pubs[0]['id']}
+                if results=='advanced':
+                    return {'result':cits[0], 'score':False, 'full-publication':pubs[0]}
         
         if len(cits)>1:
             outputs = [self.select_pipeline(f"{citation} [SEP] {cit}") for cit in cits]
             get_reranked_pubs = self.get_highest_true_position(outputs, pubs)
             if get_reranked_pubs!=None:
                 if results=='simple':
-                    return {'result':self.generate_apa_citation(get_reranked_pubs), 'score':'to implement'}
+                    return {'result':self.generate_apa_citation(get_reranked_pubs), 'score':'to implement','id':get_reranked_pubs['id']}
                 if results=='advanced':
-                    return {'result':self.generate_apa_citation(get_reranked_pubs), 'score':'to implement', 'full-publication':get_reranked_pubs} 
+                    return {'result':self.generate_apa_citation(get_reranked_pubs), 'score':'to implement', 'id':get_reranked_pubs['id'],'full-publication':get_reranked_pubs} 
             else:
                 return {'result':None}
                     
         else:
             return {'result':None}
-
