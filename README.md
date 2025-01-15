@@ -5,9 +5,13 @@ Citation Parser is a Python package designed to process raw citation texts and l
 
 Citation Parser follows a structured multi-step process to achieve accurate citation linking:
 
-1. **Pre-Screening**: a classification model determines whether the given text is a valid citation or not.
-2. **Citation Parsing (NER)**: sophisticated Named Entity Recognition (NER) extracts key fields from the citation. The citation is parsed into structured fields using a fine-tuned Named Entity Recognition model. The extracted fields can include:
+1. **Pre-Screening**: a classification model based on `distilbert/distilbert-base-multilingual-cased` determines whether the given text is a valid citation or not.
+![image](https://github.com/user-attachments/assets/39748a7d-192c-4787-aa35-5827c8f0c9bf)
+3. **Citation Parsing (NER)**: sophisticated Named Entity Recognition (NER) extracts key fields from the citation. The citation is parsed into structured fields using a fine-tuned Named Entity Recognition model. The extracted fields can include:
     - `TITLE`, `AUTHORS`, `VOLUME`, `ISSUE`, `YEAR`, `DOI`, `ISSN`, `ISBN`, `FIRST_PAGE`, `LAST_PAGE`, `JOURNAL`, and `EDITOR`.
+
+![image](https://github.com/user-attachments/assets/8cb6a723-5373-4685-80c0-4a09ae47ad06)
+
 3. **Candidate Identification**: a set of carefully crafted queries to the OpenAlex API retrieves one or more candidate publications based on the parsed citation fields. The parsed information is used to construct a series of queries to the OpenAlex API, retrieving one or more potential matches for the citation.
 4. **Pairwise Classification**: a pairwise classification model predicts the likelihood of the identified candidates matching the original citation. This model is fine-tuned on a dataset of citation pairs in the format: `"CITATION 1 [SEP] CITATION 2"`. If multiple candidates are retrieved, the publication with the highest likelihood score is returned.
 
@@ -71,6 +75,15 @@ Citation Parser is ideal for:
 - 🤗 **SELECT model available at: https://huggingface.co/SIRIS-Lab/citation-parser-SELECT**
 - 🤗 **NER model available at: https://huggingface.co/SIRIS-Lab/citation-parser-ENTITY**
 - 🤗 **TYPE model available at: https://huggingface.co/SIRIS-Lab/citation-parser-TYPE**
+
+### 📊 Model Performance Metrics
+The performance of each model used in the Citation Parser is evaluated using the F1 score. Below are the F1 scores for each of the key models involved in citation parsing and linking:
+
+| Model            | F1 Score |
+|---------------------|----------|
+| **TYPE Model (Citation Pre-screening)**  | 0.941638 |
+| **NER Model (Citation Citation)**  | 0.949772 |
+ **SELECT Model (Candidate Selection)**  | 0.846972 |
 
 # Future features
 - Improved candidate retrieval: advanced query strategies for ambiguous or incomplete citations.
