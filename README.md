@@ -49,12 +49,19 @@ The output would look like this:
 
 ## Parameters
 - **api_target**: Specifcy knowledge graphs to query. Options include:
-    - `openalex` - Links to OpenAlex
+    - `openalex` - [*default*] Links to OpenAlex
     - `openaire` - Links to OpenAIRE
     - `pubmed` - Links to PubMed
 - **output**: Specifies the type of result returned:
     - `simple` – Returns a concise, structured citation match.
     - `full` – Returns a detailed, full citation with additional metadata.
+
+### Returns
+- result: *dict* with the folling attributues:
+    - `result`: Citation from the linked source.
+    - `score`: Similarity score with the input citatio
+    - `id`: `publication_id` in the target Scholarly Knowledge Graph (OpenAlex, OpenAIRE, or PubMed)
+    - (if `output='full'`) `full-publication`: Publication object from the target API
 
 ## Dependencies
 
