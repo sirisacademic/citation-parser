@@ -1,5 +1,5 @@
 # citation-parser 🖇️🧻🎓
-Citation Parser is a Python package designed to process raw citation texts and link them to scholarly knowledge graphs like OpenAlex (OpenAIRE support coming soon). It leverages advanced natural language processing techniques powered by three small, fine-tuned language models to deliver accurate and robust citation parsing and linking.
+Citation Parser is a Python package designed to process raw citation texts and link them to scholarly knowledge graphs like OpenAlex, OpenAIRE, and PubMed. It leverages advanced natural language processing techniques powered by three small, fine-tuned language models to deliver accurate and robust citation parsing and linking.
 
 ## 🔨 Key steps of the tools:
 
@@ -33,7 +33,7 @@ parser = CitationParser()
 citation = "MURAKAMI, H等: 'Unique thermal behavior of acrylic PSAs bearing long alkyl side groups and crosslinked by aluminum chelate', 《EUROPEAN POLYMER JOURNAL》"
 
 # Parse and link the citation
-result = parser.link_citation(citation)
+result = parser.link_citation(citation,api = "openalex")
 ```
 
 The output would look like this:
@@ -58,14 +58,18 @@ Citation Parser is ideal for:
 - Citation Validation: verify the correctness of citations in manuscripts.
 - Scholarly Database Integration: link citations to knowledge graphs like OpenAlex and OpenAIRE.
 
+## Models
+- 🤗 **SELECT model available at: https://huggingface.co/SIRIS-Lab/citation-parser-SELECT**
+- 🤗 **NER model available at: https://huggingface.co/SIRIS-Lab/citation-parser-ENTITY**
+- 🤗 **TYPE model available at: https://huggingface.co/SIRIS-Lab/citation-parser-TYPE**
+
 # Future features
-- Support for OpenAIRE: integration with OpenAIRE's knowledge graph for broader linking capabilities.
 - Improved candidate retrieval: advanced query strategies for ambiguous or incomplete citations.
 - Translation to multilingual input to do multiple searches in both input language and English
 
 ## 📫 Contact
 
-For further information, please contact <info@sirisacademic.com>.
+For further information, please contact <nicolau.duransilva@sirisacademic.com>.
 
 ## ⚖️ License
 
