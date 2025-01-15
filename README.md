@@ -33,7 +33,7 @@ parser = CitationParser()
 citation = "MURAKAMI, H等: 'Unique thermal behavior of acrylic PSAs bearing long alkyl side groups and crosslinked by aluminum chelate', 《EUROPEAN POLYMER JOURNAL》"
 
 # Parse and link the citation
-result = parser.link_citation(citation,api = "openalex")
+result = parser.link_citation(citation, api_target = "openalex", output = 'simple')
 ```
 
 The output would look like this:
