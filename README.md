@@ -72,9 +72,9 @@ Citation Parser is ideal for:
 - Scholarly Database Integration: link citations to knowledge graphs like OpenAlex and OpenAIRE.
 
 ## Models
-- 🤗 **SELECT model available at: https://huggingface.co/SIRIS-Lab/citation-parser-SELECT**
-- 🤗 **NER model available at: https://huggingface.co/SIRIS-Lab/citation-parser-ENTITY**
 - 🤗 **TYPE model available at: https://huggingface.co/SIRIS-Lab/citation-parser-TYPE**
+- 🤗 **NER model available at: https://huggingface.co/SIRIS-Lab/citation-parser-ENTITY**
+- 🤗 **SELECT model available at: https://huggingface.co/SIRIS-Lab/citation-parser-SELECT**
 
 ### 📊 Model Performance Metrics
 The performance of each model used in the Citation Parser is evaluated using the F1 score. Below are the F1 scores for each of the key models involved in citation parsing and linking:
