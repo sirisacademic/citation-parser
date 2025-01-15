@@ -89,7 +89,7 @@ class CitationParser:
                         
         return candidates
 
-    def link_citation(self, citation, results='simple', api='openalex'):
+    def link_citation(self, citation, output='simple', api_target='openalex'):
         """
         Links a citation to its corresponding data using the specified API (OpenAlex or OpenAIRE).
         
@@ -98,14 +98,14 @@ class CitationParser:
         :param api: The selected API ('openalex' or 'openaire').
         :return: A dictionary with the linked citation result or an error message.
         """
-        def extract_id(publication, api):
+        def extract_id(publication, api_target):
             """Helper function to extract the ID based on the API."""
-            if api == 'openalex':
+            if api_target == 'openalex':
                 return publication.get('id')
-            elif api == 'openaire':
+            elif api_target == 'openaire':
                 #https://api.openaire.eu/search/publications?openairePublicationID=doi_dedup___::99fc3bb794e0789acc3f5a7195a1c9c1&format=json
                 return publication.get('header',{}).get('dri:objIdentifier',{}).get('$',None)
-            elif api=='pubmed':
+            elif api_target=='pubmed':
                 root = ET.fromstring(publication)
                 pmid = root.findtext("PubmedArticle/MedlineCitation/PMID", None)
                 if pmid:
@@ -119,32 +119,32 @@ class CitationParser:
             return {"error": "This text is not a citation. Please introduce a valid citation."}
 
         ner_entities = self.process_ner_entities(citation)
-        pubs = self.search_api(ner_entities, api=api)
-        cits = [self.generate_apa_citation(pub,api=api) for pub in pubs]
+        pubs = self.search_api(ner_entities, api=api_target)
+        cits = [self.generate_apa_citation(pub,api=api_target) for pub in pubs]
         
         if len(cits)==1:
             pairwise = [self.select_pipeline(f"{citation} [SEP] {cit}") for cit in cits]
             if pairwise[0][0]['label']=='True':
-                pub_id = extract_id(pubs[0], api)
-                if results=='simple':
+                pub_id = extract_id(pubs[0], api_target)
+                if output=='simple':
                     return {'result':cits[0], 'score':pairwise[0][0]['score'],'id':pub_id}
-                if results=='advanced':
+                if output=='advanced':
                     return {'result':cits[0], 'score':pairwise[0][0]['score'],  'id':pub_id, 'full-publication':pubs[0]}
             else:
-                if results=='simple':
+                if output=='simple':
                     return {'result':cits[0], 'score':False,'id':pub_id}
-                if results=='advanced':
+                if output=='advanced':
                     return {'result':cits[0], 'score':False, 'full-publication':pubs[0]}
         
         if len(cits)>1:
             outputs = [self.select_pipeline(f"{citation} [SEP] {cit}") for cit in cits]
             get_reranked_pub, score = self.get_highest_true_position(outputs, pubs)
             if get_reranked_pub!=None:
-                pub_id = extract_id(get_reranked_pub, api)
-                if results=='simple':
-                    return {'result':self.generate_apa_citation(get_reranked_pub, api = api), 'score':score,'id':pub_id}
-                if results=='advanced':
-                    return {'result':self.generate_apa_citation(get_reranked_pub, api = api), 'score':score, 'id':pub_id,'full-publication':get_reranked_pub} 
+                pub_id = extract_id(get_reranked_pub, api_target)
+                if output=='simple':
+                    return {'result':self.generate_apa_citation(get_reranked_pub, api = api_target), 'score':score,'id':pub_id}
+                if output=='advanced':
+                    return {'result':self.generate_apa_citation(get_reranked_pub, api = api_target), 'score':score, 'id':pub_id,'full-publication':get_reranked_pub} 
             else:
                 return {'result':None}
                     

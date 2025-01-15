@@ -43,6 +43,15 @@ The output would look like this:
  'id': 'https://openalex.org/W2082866977'}
 ```
 
+## Parameters
+- **api_target**: Specifcy knowledge graphs to query. Options include:
+    - `openalex` - Links to OpenAlex
+    - `openaire` - Links to OpenAIRE
+    - `pubmed` - Links to PubMed
+- **output**: Specifies the type of result returned:
+    - `simple` – Returns a concise, structured citation match.
+    - `full` – Returns a detailed, full citation with additional metadata.
+
 ## Dependencies
 
 Ensure you have all necessary dependencies installed. You can install them using the following command:
