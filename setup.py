@@ -15,7 +15,7 @@ setup(
     description="CitationParser provides tools for processing raw citation and linking to objects in scholarly knowledge graphs.",
     url="https://github.com/sirisacademic/citation-parser",
     packages=find_packages(),  # Automatically find packages within citation_parser/
-    package_dir={"": "citation-parser"},  # Ensure the module path is correct
+    package_dir={"": "citation_parser"},
     install_requires=requirements,  # Load dependencies from requirements.txt
     python_requires=">=3.9",
     include_package_data=True,  # Include additional files specified in MANIFEST.in
