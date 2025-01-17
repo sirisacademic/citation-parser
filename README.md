@@ -55,6 +55,9 @@ The output would look like this:
 - **output**: Specifies the type of result returned:
     - `simple` – Returns a concise, structured citation match.
     - `full` – Returns a detailed, full citation with additional metadata.
+- **device**:
+    - `cpu`: Utilises the CPU for model inference, suitable for environments without GPU support. Recommended for smaller workloads or when GPU is unavailable.
+    - `cuda`: Utilises GPUs via CUDA for faster inference. Recommended for environments where GPUs are available and high performance is required.
 
 ### Returns
 - result: *dict* with the folling attributues:
