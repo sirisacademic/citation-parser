@@ -10,8 +10,8 @@ import string
 from googlesearch import search
 import re
 import time
-from search import search_api
-from search import citation_formatter
+from .search import search_api
+from .search import citation_formatter
 import xml.etree.ElementTree as ET
 
 class CitationParser:
