@@ -20,7 +20,7 @@ The best-matching candidate is selected based on the likelihood score and return
 ## 💻 Installation
 
 ```bash
-pip install citation-parser
+pip install git+https://github.com/sirisacademic/citation-parser.git
 ```
 
 ## Usage
