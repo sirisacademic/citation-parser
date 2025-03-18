@@ -2,6 +2,9 @@ import requests
 from googlesearch import search
 import re
 import time
+import requests
+import time
+
 
 class BaseAPIStrategy:
     def search(self, ner_entities, **kwargs):
@@ -339,14 +342,210 @@ class PubMedStrategy(BaseAPIStrategy):
 
         return candidates
 
-            
+class CrossRefStrategy(BaseAPIStrategy):
+    def search(self, ner_entities, **kwargs):
+        base_url = "https://api.crossref.org/works"
+
+        # Extract fields from NER entities
+        fields = {
+            "title": ner_entities.get("TITLE", [None])[0],
+            "year": ner_entities.get("PUBLICATION_YEAR", [None])[0],
+            "journal": ner_entities.get("JOURNAL", [None])[0],
+            "doi": ner_entities.get("DOI", [None])[0].replace("https://doi.org/", "").replace(' ', '')
+                    if ner_entities.get("DOI") and ner_entities.get("DOI")[0] is not None
+                    else None,
+            "author": ner_entities.get("AUTHORS", [None])[0].split(" ")[0].strip() if ner_entities.get("AUTHORS") else None,
+
+        }
+
+        # Define field combinations for search queries
+        field_combinations = [
+            ["doi"],
+            ["title", "year", "author", "journal"],
+            ["title", "author", "year"],
+            ["title", "year"],
+            ["title", "author"],
+            ["year", "author", "journal"],
+            ["title"],
+        ]
+
+        # Filter combinations based on available fields
+        filtered_combinations = self.filter_field_combinations(fields, field_combinations)
+
+        candidates = []
+        results = []
+
+        for combination in filtered_combinations:
+            query_params = {}
+
+            for field in combination:
+                value = fields.get(field)
+                if value:
+                    if field == "title":
+                        query_params["query.title"] = value
+                    elif field == "author":
+                        query_params["query.author"] = value
+                    elif field == "year":
+                        query_params["filter"] = f"from-pub-date:{value}-01-01,until-pub-date:{value}-12-31"
+                    elif field == "doi":
+                        query_params["query"] = value  # DOI search
+                    elif field == "journal":
+                        query_params["query.container-title"] = value  # DOI search
+
+            # Construct the API request
+            query_string = "&".join(f"{k}={v}" for k, v in query_params.items())
+            api_url = f"{base_url}?{query_string}"
+
+            max_retries = 3
+            for attempt in range(max_retries):
+                try:
+                    response = requests.get(api_url, timeout=2)
+                    if response.status_code == 200:
+                        data = response.json()
+                        items = data.get("message", {}).get("items", [])
+                        candidates.extend(items)
+                        break  # Exit retry loop if successful
+                    else:
+                        print(f"Attempt {attempt + 1}: Status code {response.status_code}")
+                except requests.exceptions.RequestException as e:
+                    print(f"Attempt {attempt + 1}: Request failed - {e}")
+                
+                if attempt < max_retries - 1:
+                    time.sleep(1)
+
+            if len(results)==1:  # Return results if found
+                return results
+                
+            if len(candidates)>1:
+                return candidates
+        return candidates
+
+class HALSearchStrategy(BaseAPIStrategy):
+    def __init__(self, base_url="https://api.archives-ouvertes.fr/search/"):
+        self.base_url = base_url
+
+    def build_query(self, fields, combination):
+        """Build query string for specific field combination with AND operator."""
+        query_parts = []
+        for field in combination:
+            field_search = field.split('-')[0]
+            value = fields.get(field_search)
+
+            if value:
+                if field == "title":
+                    value = value.replace(",", "").replace(":", "")
+                    query_parts.append(f"title_t:\"{value}\"")  # Changed to title_t for full-text search
+                elif field == "doi":
+                    query_parts.append(f"doiId_s:\"{value}\"")
+                elif field == "title-half":
+                    words = value.split()
+                    mid_point = len(words) // 2
+                    first_half = " ".join(words[:mid_point])
+                    second_half = " ".join(words[mid_point:])
+                    query_parts.append(f"title_t:\"{first_half}\" OR title_t:\"{second_half}\"")  # Changed to title_t
+                elif field == "author":
+                    query_parts.append(f"authFullName_t:\*{value}\*")
+                elif field == "year":
+                    query_parts.append(f"publicationDateY_s:{value}")
+                elif field == "journal":
+                    query_parts.append(f"journalTitle_t:\*{value}\*")
+                elif field == "first_page":
+                    query_parts.append(f"page_s:\*{value}\*")
+                elif field == "last_page":
+                    query_parts.append(f"page_s:\*{value}\*")
+                elif field == "volume":
+                    query_parts.append(f"volume_s:\"{value}\"")
+                elif field == "issue":
+                    query_parts.append(f"issue_s:\"{value}\"")
+        
+        # Join the query parts with AND operator to combine fields
+        return " AND ".join(query_parts)
+
+    def search(self, ner_entities, **kwargs):
+        """Perform search based on extracted fields from NER."""
+        fields = {
+            "title": ner_entities.get("TITLE", [None])[0],
+            "journal": ner_entities.get("JOURNAL", [None])[0],
+            "first_page": ner_entities.get("PAGE_FIRST", [None])[0],
+            "last_page": ner_entities.get("PAGE_LAST", [None])[0],
+            "volume": ner_entities.get("VOLUME", [None])[0],
+            "issue": ner_entities.get("ISSUE", [None])[0],
+            "year": ner_entities.get("PUBLICATION_YEAR", [None])[0],
+            "doi": ner_entities.get("DOI", [None])[0].replace("https://doi.org/", "").replace(' ', '') if ner_entities.get("DOI") else None,
+            "author": ner_entities.get("AUTHORS", [None])[0].split(" ")[0].strip() if ner_entities.get("AUTHORS") else None
+        }
+
+        # Define field combinations for querying
+        field_combinations = [
+            ["doi"],
+            ["title", "year"],
+            ["title"],
+            ["title", "year", "author"],
+            ["title", "year", "author", "journal", "first_page", "last_page", "volume", "issue"],
+            ["title", "year", "author", "journal", "first_page", "last_page", "volume"],
+            ["title", "year", "author", "first_page", "last_page", "volume"],
+            ["title", "year", "author", "journal", "volume", "issue"],
+            ["title", "year", "author", "journal"],
+            ["year", "author", "first_page", "last_page"],
+            ["year", "author", "journal", "volume"],
+            ["year", "journal", "volume", "first_page"],
+        ]
+
+        filtered_combinations = self.filter_field_combinations(fields, field_combinations)
+
+        # Add title-half variations if title exists
+        if fields.get("title"):
+            filtered_combinations.append(["title-half", "year"])
+            filtered_combinations.append(["title-half"])
+
+        candidates = []
+        results = []
+
+        for combination in filtered_combinations:
+            query_string = self.build_query(fields, combination)
+
+            if not query_string:  # Skip empty queries
+                continue
+
+            # Build the API request URL with the generated query string
+            api_url = f"{self.base_url}?q={query_string}&fl=*&wt=json&rows=20"
+
+            # Retry logic for failed requests
+            max_retries = 3
+            for attempt in range(max_retries):
+                try:
+                    response = requests.get(api_url, timeout=3)  # 3-second timeout
+                    if response.status_code == 200:
+                        docs = response.json().get("response", {}).get("docs", [])
+                        candidates.extend(docs)
+                        break  # Exit retry loop on success
+                    else:
+                        print(f"Attempt {attempt + 1}: Received status code {response.status_code}")
+                except requests.exceptions.RequestException as e:
+                    print(f"Attempt {attempt + 1}: Request failed with error: {e}")
+
+                if attempt < max_retries - 1:
+                    time.sleep(1)
+
+            # If only one result found, return immediately
+            if len(results) == 1:
+                return results
+
+            # If multiple results found, return them
+            if len(candidates) > 1:
+                return candidates
+
+        return candidates  # Return all collected results if no perfect match
+               
 
 class SearchAPI:
     def __init__(self):
         self.strategies = {
             "openalex": OpenAlexStrategy(),
             "openaire": OpenAIREStrategy(),
-            "pubmed": PubMedStrategy()
+            "pubmed": PubMedStrategy(),
+            "crossref": CrossRefStrategy(),  # Added CrossRef Strategy
+            "hal": HALSearchStrategy(),  # Added CrossRef Strategy
         }
 
     def search_api(self, ner_entities, api="openalex", **kwargs):
@@ -361,3 +560,5 @@ class SearchAPI:
         
         strategy = self.strategies[api]
         return strategy.search(ner_entities, **kwargs)
+    
+
