@@ -1,4 +1,4 @@
-# citation_parser.py
+# references_tractor.py
 import requests
 from tqdm.notebook import tqdm
 import pandas as pd
@@ -16,7 +16,7 @@ import xml.etree.ElementTree as ET
 import json
 from collections import Counter
 
-class CitationParser:
+class ReferencesTractor:
     def __init__(self, ner_model_path="SIRIS-Lab/citation-parser-ENTITY", select_model_path="SIRIS-Lab/citation-parser-SELECT",prescreening_model_path="SIRIS-Lab/citation-parser-TYPE", device="cpu"):
         # Initialize the NER pipeline
         self.ner_pipeline = pipeline(

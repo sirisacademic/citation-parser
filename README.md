@@ -1,5 +1,8 @@
-# citation-parser 🖇️🧻🎓
-Citation Parser is a Python package designed to process raw citation texts and link them to scholarly knowledge graphs like OpenAlex, OpenAIRE, and PubMed. It leverages advanced natural language processing techniques powered by three small, fine-tuned language models to deliver accurate and robust citation parsing and linking.
+# references-tractor 🚜🖇️🧻🎓
+References Tractor is a Python package designed to process raw citation texts and link them to scholarly knowledge graphs like OpenAlex, OpenAIRE, PubMed, CrossRef, and HAL. It leverages advanced natural language processing techniques powered by three small, fine-tuned language models to deliver accurate and robust citation parsing and linking.
+
+![plot](docs/reference_tractor_image.png)
+
 
 ## 🔨 Key steps of the tools:
 
@@ -28,23 +31,25 @@ pip install git+https://github.com/sirisacademic/citation-parser.git
 Here’s a basic example of how to use Citation Parser:
 
 ```python
-from citation_parser import CitationParser
+from references_tractor import ReferencesTractor
 
 # Initialize the parser
-parser = CitationParser()
+ref_tractor = ReferencesTractor()
 
 # Raw citation text
 citation = "MURAKAMI, H等: 'Unique thermal behavior of acrylic PSAs bearing long alkyl side groups and crosslinked by aluminum chelate', 《EUROPEAN POLYMER JOURNAL》"
 
 # Parse and link the citation
-result = parser.link_citation(citation, api_target = "openalex", output = 'simple')
+result = ref_tractor.link_citation(citation, api_target = "openalex", output = 'simple')
 ```
 
 The output would look like this:
 ```python
-{'result': 'Hiroto Murakami, Keisuke Futashima, Minoru Nanchi, et al. (2010). Unique thermal behavior of acrylic PSAs bearing long alkyl side groups and crosslinked by aluminum chelate. European Polymer Journal, 47 378-384. doi: 10.1016/j.eurpolymj.2010.12.012',
- 'score': 0.9997150301933289,
- 'id': 'https://openalex.org/W2082866977'}
+{'result': 'Hiroto Murakami, Keisuke Futashima, Minoru Nanchi, et al. (2010). Unique thermal behavior of acrylic PSAs bearing long alkyl side groups and crosslinked by aluminum chelate. European Polymer Journal, 47 (3) 378-384. doi: 10.1016/j.eurpolymj.2010.12.012',
+ 'score': 0.9697238802909851,
+ 'openalex_id': 'W2082866977',
+ 'doi': '10.1016/j.eurpolymj.2010.12.012',
+ 'url': 'https://openalex.org/W2082866977'}
 ```
 
 ## Parameters

@@ -8,11 +8,11 @@ except FileNotFoundError:
     requirements = []
 
 setup(
-    name="citation-parser",
+    name="references-tractor",
     version="1.0.0",
     author="Nicolau Duran-Silva, Pablo Accuosto, Ruggero Cortini",
     author_email="nicolau.duransilva@sirisacademic.com, pablo.accuosto@sirisacademic.com, ruggero.cortini@sirisacademic.com",
-    description="CitationParser provides tools for processing raw citation and linking to objects in scholarly knowledge graphs.",
+    description="ReferencesTractor provides tools for processing raw citation and linking to objects in scholarly knowledge graphs.",
     url="https://github.com/sirisacademic/citation-parser",
     packages=find_packages(),  # Automatically find all packages
     python_requires=">=3.9",
