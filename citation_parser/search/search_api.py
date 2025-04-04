@@ -145,8 +145,7 @@ class OpenAlexStrategy(BaseAPIStrategy):
                         results = response.json().get("results", [])
                         candidates.extend(results)
                         break  # Exit retry loop on success
-                    else:
-                        print(f"Attempt {attempt + 1}: Received status code {response.status_code}")
+
                 except requests.exceptions.RequestException as e:
                     print(f"Attempt {attempt + 1}: Request failed with error: {e}")
                 # Wait before retrying
@@ -234,7 +233,8 @@ class OpenAIREStrategy(BaseAPIStrategy):
                     else:
                         print(f"Attempt {attempt + 1}: Received status code {response.status_code}")
                 except requests.exceptions.RequestException as e:
-                    print(f"Attempt {attempt + 1}: Request failed with error: {e}")
+                    #print(f"Attempt {attempt + 1}: Request failed with error: {e}")
+                    pass
                 # Wait before retrying
                 if attempt < max_retries - 1:
                     time.sleep(1)
@@ -405,8 +405,7 @@ class CrossRefStrategy(BaseAPIStrategy):
                         items = data.get("message", {}).get("items", [])
                         candidates.extend(items)
                         break  # Exit retry loop if successful
-                    else:
-                        print(f"Attempt {attempt + 1}: Status code {response.status_code}")
+
                 except requests.exceptions.RequestException as e:
                     print(f"Attempt {attempt + 1}: Request failed - {e}")
                 
@@ -519,8 +518,7 @@ class HALSearchStrategy(BaseAPIStrategy):
                         docs = response.json().get("response", {}).get("docs", [])
                         candidates.extend(docs)
                         break  # Exit retry loop on success
-                    else:
-                        print(f"Attempt {attempt + 1}: Received status code {response.status_code}")
+
                 except requests.exceptions.RequestException as e:
                     print(f"Attempt {attempt + 1}: Request failed with error: {e}")
 

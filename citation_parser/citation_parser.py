@@ -45,7 +45,6 @@ class CitationParser:
         # Initialize the search API
         self.searcher = search_api.SearchAPI()
 
-
     def process_ner_entities(self, citation):
         output = self.ner_pipeline(citation)
 
@@ -94,10 +93,35 @@ class CitationParser:
                         
         return candidates
     
+    def get_uri(self, pid, doi, api_target):
+        if api_target == 'openalex':
+            if pid:
+                return f"https://openalex.org/{pid}"
+
+        elif api_target == 'openaire':
+            if pid:
+                if doi:
+                    return f"https://explore.openaire.eu/search/publication?pid={doi}"
+                else:
+                    return f"https://explore.openaire.eu/search/publication?pid={pid}"
+                
+        elif api_target=='pubmed':
+            if pid:
+                return f"https://pubmed.ncbi.nlm.nih.gov/{pid}"
+        elif api_target=='crossref':
+            if doi:
+                return f"https://doi.org/{doi}"
+
+        elif api_target=='hal':
+            if pid:
+                return f"https://hal.science/{pid}"
+
+        return None
+
     def extract_id(self, publication, api_target):
             """Helper function to extract the ID based on the API."""
             if api_target == 'openalex':
-                return publication.get('id')
+                return publication.get('id').replace('https://openalex.org/','')
             elif api_target == 'openaire':
                 #https://api.openaire.eu/search/publications?openairePublicationID=doi_dedup___::99fc3bb794e0789acc3f5a7195a1c9c1&format=json
                 return publication.get('header',{}).get('dri:objIdentifier',{}).get('$',None)
@@ -111,6 +135,39 @@ class CitationParser:
                 return publication.get('DOI')
             elif api_target=='hal':
                 return publication.get('halId_s')
+            return None
+    
+    def extract_doi(self, publication, api_target):
+            """Helper function to extract the DOI based on the API."""
+            if api_target == 'openalex':
+                doi = publication.get("doi", None)
+                if doi:
+                    doi = doi.replace("https://doi.org/", "")
+                return doi
+            elif api_target == 'openaire':
+                # Extract DOI
+                identifiers = publication.get('metadata', {}).get('oaf:entity', {}).get('oaf:result', {}).get('pid', [])
+                # Ensure identifiers is always a list
+                if isinstance(identifiers, dict):  
+                    identifiers = [identifiers]  
+                doi = None
+                for identifier in identifiers:
+                    if identifier.get('@classid') == 'doi':
+                        doi =identifier.get('$',None)
+                        doi = doi.replace("https://doi.org/", "")
+                return doi
+            elif api_target=='pubmed':
+                root = ET.fromstring(publication)
+                article = root.find("PubmedArticle/MedlineCitation/Article")
+                doi_element = article.findtext("ELocationID[@EIdType='doi']", None)
+                if doi_element is not None:
+                    doi = doi_element.text
+                return doi
+            elif api_target=='crossref':
+                return publication.get('DOI', None)
+            elif api_target=='hal':
+                doi = publication.get("doiId_s", None)
+                return doi
             return None
 
     def link_citation(self, citation, output='simple', api_target='openalex'):
@@ -139,10 +196,12 @@ class CitationParser:
             pairwise = [self.select_pipeline(f"{citation} [SEP] {cit}") for cit in cits]
             if pairwise[0][0]['label']==True:
                 pub_id = self.extract_id(pubs[0], api_target)
+                pub_doi = self.extract_doi(pubs[0], api_target)
+                url = self.get_uri(pub_id, pub_doi, api_target)
                 if output=='simple':
-                    return {'result':cits[0], 'score':pairwise[0][0]['score'],'id':pub_id}
+                    return {'result':cits[0], 'score':pairwise[0][0]['score'],f'{api_target}_id':pub_id, 'doi':pub_doi, 'url':url}
                 if output=='advanced':
-                    return {'result':cits[0], 'score':pairwise[0][0]['score'],  'id':pub_id, 'full-publication':pubs[0]}
+                    return {'result':cits[0], 'score':pairwise[0][0]['score'],  f'{api_target}_id':pub_id, 'doi':pub_doi, 'url':url,'full-publication':pubs[0]}
             else:
                 pub_id = self.extract_id(pubs[0], api_target)
                 if output=='simple':
@@ -155,59 +214,17 @@ class CitationParser:
             get_reranked_pub, score = self.get_highest_true_position(outputs, pubs)
             if get_reranked_pub!=None:
                 pub_id = self.extract_id(get_reranked_pub, api_target)
+                pub_doi = self.extract_doi(pubs[0], api_target)
+                url = self.get_uri(pub_id, pub_doi, api_target)
                 if output=='simple':
-                    return {'result':self.generate_apa_citation(get_reranked_pub, api = api_target), 'score':score,'id':pub_id}
+                    return {'result':self.generate_apa_citation(get_reranked_pub, api = api_target), 'score':score,f'{api_target}_id':pub_id, 'doi':pub_doi, 'url':url}
                 if output=='advanced':
-                    return {'result':self.generate_apa_citation(get_reranked_pub, api = api_target), 'score':score, 'id':pub_id,'full-publication':get_reranked_pub} 
+                    return {'result':self.generate_apa_citation(get_reranked_pub, api = api_target), 'score':score, f'{api_target}_id':pub_id, 'doi':pub_doi, 'url':url,'full-publication':get_reranked_pub} 
             else:
                 return {}
                     
         else:
             return {}
-        
-    def get_doi(self, publication, api_target):
-        """
-        Extracts the DOI from a publication data dictionary based on the API source.
-
-        :param publication: Dictionary containing the publication data.
-        :param api_target: The source API name (e.g., 'openalex', 'openaire', 'pubmed', 'crossref', 'hal').
-        :return: Extracted DOI or None if not found.
-        """
-        doi = None
-
-        if api_target == "openalex":
-            doi = publication.get("doi", None)
-            if doi:
-                doi = doi.replace("https://doi.org/", "")
-
-        elif api_target == "openaire":
-            # Extract DOI
-            identifiers = publication.get('metadata', {}).get('oaf:entity', {}).get('oaf:result', {}).get('pid', [])
-            # Ensure identifiers is always a list
-            if isinstance(identifiers, dict):  
-                identifiers = [identifiers]  
-            doi = None
-            for identifier in identifiers:
-                if identifier.get('@classid') == 'doi':
-                    doi =identifier.get('$',None)
-                    doi = doi.replace("https://doi.org/", "")
-
-        elif api_target == "pubmed":
-                root = ET.fromstring(publication)
-                article = root.find("PubmedArticle/MedlineCitation/Article")
-                doi_element = article.findtext("ELocationID[@EIdType='doi']", None)
-                if doi_element is not None:
-                    doi = doi_element.text
-
-        elif api_target == "crossref":
-            doi = publication.get("DOI", None)
-            if doi:
-                doi = doi.replace("https://doi.org/", "")
-
-        elif api_target == "hal":
-            doi = publication.get("doiId_s", None)
-
-        return doi
 
     def link_citation_ensemble(self, citation, output='simple', api_targets=['openalex', 'openaire', 'pubmed', 'crossref', 'hal']):
         """
@@ -225,9 +242,8 @@ class CitationParser:
         for api in api_targets:
 
             print(api)
+
             output = self.link_citation(citation, output="advanced", api_target=api)
-            
-            print(output)
 
             if not output or not isinstance(output, dict) or 'full-publication' not in output:
                 # If output is empty, not a dictionary, or missing 'full-publication', handle appropriately
@@ -237,11 +253,12 @@ class CitationParser:
             else:
                 # If the output is valid and contains 'full-publication'
                 try:
-                    doi = self.get_doi(output['full-publication'], api)
+                    doi = output.get('doi', None)
                     
                     if doi:  # Only consider non-None DOIs
+                        print(f"Adding DOI to counter: {doi} from {api}")  # Debugging
                         doi_counter[doi] += 1
-                        extract_id = self.extract_id(output['full-publication'], api_target=api)  # Extract the native ID
+                        extract_id = output.get(f'{api}_id',None)
                         
                         if extract_id:
                             extract_ids[api] = extract_id  # Store the extract_id
@@ -261,22 +278,17 @@ class CitationParser:
         for api in missing_sources:
             pubs = self.search_api({'DOI': [best_doi]}, api=api)
 
-            if len(pubs)>0:
+            pub_id = None  # Define pub_id before the conditional block
+
+            if len(pubs) > 0:
                 pub_id = self.extract_id(pubs[0], api)
 
-            if output:
-                extract_id = pub_id
-                if extract_id:
-                    extract_ids[api] = extract_id  # Store the native ID
-
+            if pub_id:  # Check if pub_id is not None before using it
+                extract_ids[api] = pub_id
             else:
                 extract_ids[api] = None
 
-        if not best_doi.startswith("https://doi.org/"):
-            best_doi = "https://doi.org/" + best_doi
-
-
         return {
             "doi": best_doi,
-            "extract_ids": extract_ids
+            "external_ids": extract_ids
         }
