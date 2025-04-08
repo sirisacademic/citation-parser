@@ -1,294 +1,277 @@
 # references_tractor.py
-import requests
-from tqdm.notebook import tqdm
-import pandas as pd
-from transformers import AutoTokenizer, AutoModelForTokenClassification, pipeline, AutoModelForSequenceClassification
-from datasets import Dataset
-from transformers.pipelines.pt_utils import KeyDataset
-import requests
-import string
-from googlesearch import search
+
+# Import necessary modules
 import re
 import time
+import json
+import xml.etree.ElementTree as ET
+from collections import Counter
+from typing import Any, Dict, List, Optional, Tuple, Union
+
+import requests
+import pandas as pd
+from tqdm.notebook import tqdm
+from transformers import (
+    AutoTokenizer,
+    AutoModelForTokenClassification,
+    AutoModelForSequenceClassification,
+    pipeline,
+)
+from datasets import Dataset
+from transformers.pipelines.pt_utils import KeyDataset
+
+# Import internal search and citation formatting tools
 from .search import search_api
 from .search import citation_formatter
-import xml.etree.ElementTree as ET
-import json
-from collections import Counter
+
 
 class ReferencesTractor:
-    def __init__(self, ner_model_path="SIRIS-Lab/citation-parser-ENTITY", select_model_path="SIRIS-Lab/citation-parser-SELECT",prescreening_model_path="SIRIS-Lab/citation-parser-TYPE", device="cpu"):
-        # Initialize the NER pipeline
-        self.ner_pipeline = pipeline(
-            "ner",
-            model=AutoModelForTokenClassification.from_pretrained(ner_model_path),
-            tokenizer=AutoTokenizer.from_pretrained(ner_model_path),
-            aggregation_strategy="simple",
-            device=device
-        )
+    """
+    Class to extract citation entities, search bibliographic databases, 
+    and generate and link citations to their canonical records.
+    """
 
-        # Initialize the select pipeline
-        self.select_pipeline = pipeline(
-            "text-classification",
-            model=AutoModelForSequenceClassification.from_pretrained(select_model_path),
-            tokenizer=AutoTokenizer.from_pretrained(select_model_path),
-            device=device
-        )
-        # Initialize the prescreening pipeline
-        self.prescreening_pipeline = pipeline(
-            "text-classification",
-            model=AutoModelForSequenceClassification.from_pretrained(prescreening_model_path),
-            tokenizer=AutoTokenizer.from_pretrained(prescreening_model_path),
-            device=device
-        )
-
-        # Initialize the search API
+    def __init__(
+        self,
+        ner_model_path: str = "SIRIS-Lab/citation-parser-ENTITY",
+        select_model_path: str = "SIRIS-Lab/citation-parser-SELECT",
+        prescreening_model_path: str = "SIRIS-Lab/citation-parser-TYPE",
+        span_model_path: str = "SIRIS-Lab/citation-parser-SPAN",
+        device: Union[int, str] = "cpu",
+    ):
+        # Initialize three different transformer pipelines:
+        # 1. NER for citation entity extraction
+        # 2. Selection model to rank possible citation matches
+        # 3. Prescreening model to filter non-citation inputs
+        self.ner_pipeline = self._init_pipeline("ner", ner_model_path, device, agg_strategy="simple")
+        self.select_pipeline = self._init_pipeline("text-classification", select_model_path, device)
+        self.prescreening_pipeline = self._init_pipeline("text-classification", prescreening_model_path, device)
+        self.span_pipeline = self._init_pipeline("ner", span_model_path, device, agg_strategy="simple")
         self.searcher = search_api.SearchAPI()
 
-    def process_ner_entities(self, citation):
+    def _init_pipeline(
+        self, task: str, model_path: str, device: Union[int, str], agg_strategy: Optional[str] = None
+    ):
+        # Helper to initialize the appropriate transformer pipeline
+        kwargs = {
+            "model": AutoModelForTokenClassification.from_pretrained(model_path)
+            if task == "ner"
+            else AutoModelForSequenceClassification.from_pretrained(model_path),
+            "tokenizer": AutoTokenizer.from_pretrained(model_path),
+            "device": device,
+        }
+        if agg_strategy:
+            kwargs["aggregation_strategy"] = agg_strategy
+        return pipeline(task, **kwargs)
+
+    def process_ner_entities(self, citation: str) -> Dict[str, List[str]]:
+        # Extract named entities from the citation using the NER pipeline
         output = self.ner_pipeline(citation)
-
-        ner_entities = {}
+        entities = {}
         for entity in output:
-            entity_group = entity.get("entity_group")
-            word = entity.get("word", "")
-            if entity_group not in ner_entities:
-                ner_entities[entity_group] = []
-            ner_entities[entity_group].append(word)
-        return ner_entities
-    
-    def generate_apa_citation(self, data, api = 'openalex'):
+            key = entity.get("entity_group")
+            entities.setdefault(key, []).append(entity.get("word", ""))
+        return entities
 
+    def generate_apa_citation(self, data: dict, api: str = "openalex") -> str:
+        # Format a citation from retrieved metadata in APA style
         formatter = citation_formatter.CitationFormatterFactory.get_formatter(api)
-
         return formatter.generate_apa_citation(data)
-    
-    def get_highest_true_position(self, outputs, inputs):
-        # Iterate through the outputs to collect indices and scores of 'True' labels
+
+    def get_highest_true_position(
+        self, outputs: List[List[Dict[str, Any]]], inputs: List[Any]
+    ) -> Tuple[Optional[Any], Optional[float]]:
+        # Return the input with the highest "True" classification score
         true_scores = [
-            (index, result[0]['score']) if result[0]['label'] == True else (index, 0)
-            for index, result in enumerate(outputs)
-            ]
-        
-        # Find the entry with the highest score or return None if no 'True' labels exist
-        if true_scores:
-            # Get the index with the highest score
-            highest_index = max(true_scores, key=lambda x: x[1])[0]
-            
-            # Return both the input at that position and the highest score
-            return inputs[highest_index], true_scores[highest_index][1]
-        
-        return None, None  # Return None for both input and score if no 'True' labels exist
-    
-    def search_api(self, ner_entities, api="openalex"):
-        """
-        Search API using flexible field combinations.
+            (i, result[0]['score']) if result[0]['label'] is True else (i, 0.0)
+            for i, result in enumerate(outputs)
+        ]
+        if not true_scores:
+            return None, None
+        best_index = max(true_scores, key=lambda x: x[1])[0]
+        return inputs[best_index], true_scores[best_index][1]
 
-        :param ner_entities: Dictionary containing extracted NER entities
-        :param source_url: Base URL for the API
-        :return: JSON response or None if no results found
-        """
+    def search_api(self, ner_entities: Dict[str, List[str]], api: str = "openalex") -> List[dict]:
+        # Search a bibliographic API using extracted NER entities
+        return self.searcher.search_api(ner_entities, api=api)
 
-        candidates = self.searcher.search_api(ner_entities, api=api)
-                        
-        return candidates
-    
-    def get_uri(self, pid, doi, api_target):
-        if api_target == 'openalex':
-            if pid:
-                return f"https://openalex.org/{pid}"
+    def get_uri(self, pid: Optional[str], doi: Optional[str], api: str) -> Optional[str]:
+        # Construct the canonical URL to the publication based on available identifiers
+        uri_templates = {
+            "openalex": lambda: f"https://openalex.org/{pid}" if pid else None,
+            "openaire": lambda: f"https://explore.openaire.eu/search/publication?pid={doi or pid}" if pid else None,
+            "pubmed": lambda: f"https://pubmed.ncbi.nlm.nih.gov/{pid}" if pid else None,
+            "crossref": lambda: f"https://doi.org/{doi}" if doi else None,
+            "hal": lambda: f"https://hal.science/{pid}" if pid else None,
+        }
+        return uri_templates.get(api, lambda: None)()
 
-        elif api_target == 'openaire':
-            if pid:
-                if doi:
-                    return f"https://explore.openaire.eu/search/publication?pid={doi}"
-                else:
-                    return f"https://explore.openaire.eu/search/publication?pid={pid}"
-                
-        elif api_target=='pubmed':
-            if pid:
-                return f"https://pubmed.ncbi.nlm.nih.gov/{pid}"
-        elif api_target=='crossref':
-            if doi:
-                return f"https://doi.org/{doi}"
-
-        elif api_target=='hal':
-            if pid:
-                return f"https://hal.science/{pid}"
-
+    def extract_id(self, publication: dict, api: str) -> Optional[str]:
+        # Extract the publication ID depending on the API source
+        if api == "openalex":
+            return publication.get("id", "").replace("https://openalex.org/", "")
+        elif api == "openaire":
+            return publication.get('header', {}).get('dri:objIdentifier', {}).get('$')
+        elif api == "pubmed":
+            root = ET.fromstring(publication)
+            return root.findtext("PubmedArticle/MedlineCitation/PMID")
+        elif api == "crossref":
+            return publication.get("DOI")
+        elif api == "hal":
+            return publication.get("halId_s")
         return None
 
-    def extract_id(self, publication, api_target):
-            """Helper function to extract the ID based on the API."""
-            if api_target == 'openalex':
-                return publication.get('id').replace('https://openalex.org/','')
-            elif api_target == 'openaire':
-                #https://api.openaire.eu/search/publications?openairePublicationID=doi_dedup___::99fc3bb794e0789acc3f5a7195a1c9c1&format=json
-                return publication.get('header',{}).get('dri:objIdentifier',{}).get('$',None)
-            elif api_target=='pubmed':
-                root = ET.fromstring(publication)
-                pmid = root.findtext("PubmedArticle/MedlineCitation/PMID", None)
-                if pmid:
-                    pmid = pmid#f'https://pubmed.ncbi.nlm.nih.gov/{pmid}'
-                return pmid
-            elif api_target=='crossref':
-                return publication.get('DOI')
-            elif api_target=='hal':
-                return publication.get('halId_s')
+    def extract_doi(self, publication: dict, api: str) -> Optional[str]:
+        # Extract the DOI depending on the API source
+        if api == "openalex":
+            doi = publication.get("doi")
+            if isinstance(doi, str):
+                return doi.replace("https://doi.org/", "")
             return None
-    
-    def extract_doi(self, publication, api_target):
-            """Helper function to extract the DOI based on the API."""
-            if api_target == 'openalex':
-                doi = publication.get("doi", None)
-                if doi:
-                    doi = doi.replace("https://doi.org/", "")
-                return doi
-            elif api_target == 'openaire':
-                # Extract DOI
-                identifiers = publication.get('metadata', {}).get('oaf:entity', {}).get('oaf:result', {}).get('pid', [])
-                # Ensure identifiers is always a list
-                if isinstance(identifiers, dict):  
-                    identifiers = [identifiers]  
-                doi = None
-                for identifier in identifiers:
-                    if identifier.get('@classid') == 'doi':
-                        doi =identifier.get('$',None)
-                        doi = doi.replace("https://doi.org/", "")
-                return doi
-            elif api_target=='pubmed':
-                root = ET.fromstring(publication)
-                article = root.find("PubmedArticle/MedlineCitation/Article")
-                doi_element = article.findtext("ELocationID[@EIdType='doi']", None)
-                if doi_element is not None:
-                    doi = doi_element.text
-                return doi
-            elif api_target=='crossref':
-                return publication.get('DOI', None)
-            elif api_target=='hal':
-                doi = publication.get("doiId_s", None)
-                return doi
-            return None
+        elif api == "openaire":
+            identifiers = publication.get('metadata', {}).get('oaf:entity', {}).get('oaf:result', {}).get('pid', [])
+            if isinstance(identifiers, dict):
+                identifiers = [identifiers]
+            for pid in identifiers:
+                if pid.get("@classid") == "doi":
+                    return pid.get("$", "").replace("https://doi.org/", "")
+        elif api == "pubmed":
+            root = ET.fromstring(publication)
+            return root.findtext("PubmedArticle/MedlineCitation/Article/ELocationID[@EIdType='doi']")
+        elif api == "crossref":
+            return publication.get("DOI")
+        elif api == "hal":
+            return publication.get("doiId_s")
+        return None
 
-    def link_citation(self, citation, output='simple', api_target='openalex'):
+    def link_citation(self, citation: str, output: str = 'simple', api_target: str = 'openalex') -> Dict[str, Any]:
         """
-        Links a citation to its corresponding data using the specified API (OpenAlex or OpenAIRE).
-        
-        :param citation: The input citation text.
-        :param results: The output format ('simple' or 'advanced').
-        :param api: The selected API ('openalex' or 'openaire').
-        :return: A dictionary with the linked citation result or an error message.
+        Main function to process a citation string:
+        - Check if it's a valid citation
+        - Extract entities
+        - Search target API
+        - Format results and rank them
         """
-
-        # Prescreening step to check validity of the citation
-        prescreening_style = self.prescreening_pipeline(citation)
-        if prescreening_style[0]['label'] == 'False':  # Assuming the label structure
+        # Prescreen input to ensure it's likely a citation
+        if self.prescreening_pipeline(citation)[0]["label"] == "False":
             return {"error": "This text is not a citation. Please introduce a valid citation."}
 
         ner_entities = self.process_ner_entities(citation)
         pubs = self.search_api(ner_entities, api=api_target)
-        # remove duplicates
-        #pubs = [json.loads(t) for t in {json.dumps(d, sort_keys=True) for d in pubs}]
 
-        cits = [self.generate_apa_citation(pub,api=api_target) for pub in pubs]
-        
-        if len(cits)==1:
-            pairwise = [self.select_pipeline(f"{citation} [SEP] {cit}") for cit in cits]
-            if pairwise[0][0]['label']==True:
-                pub_id = self.extract_id(pubs[0], api_target)
-                pub_doi = self.extract_doi(pubs[0], api_target)
-                url = self.get_uri(pub_id, pub_doi, api_target)
-                if output=='simple':
-                    return {'result':cits[0], 'score':pairwise[0][0]['score'],f'{api_target}_id':pub_id, 'doi':pub_doi, 'url':url}
-                if output=='advanced':
-                    return {'result':cits[0], 'score':pairwise[0][0]['score'],  f'{api_target}_id':pub_id, 'doi':pub_doi, 'url':url,'full-publication':pubs[0]}
-            else:
-                pub_id = self.extract_id(pubs[0], api_target)
-                if output=='simple':
-                    return {'result':cits[0], 'score':False,'id':pub_id}
-                if output=='advanced':
-                    return {'result':cits[0], 'score':False, 'full-publication':pubs[0]}
-        
-        if len(cits)>1:
-            outputs = [self.select_pipeline(f"{citation} [SEP] {cit}") for cit in cits]
-            get_reranked_pub, score = self.get_highest_true_position(outputs, pubs)
-            if get_reranked_pub!=None:
-                pub_id = self.extract_id(get_reranked_pub, api_target)
-                pub_doi = self.extract_doi(pubs[0], api_target)
-                url = self.get_uri(pub_id, pub_doi, api_target)
-                if output=='simple':
-                    return {'result':self.generate_apa_citation(get_reranked_pub, api = api_target), 'score':score,f'{api_target}_id':pub_id, 'doi':pub_doi, 'url':url}
-                if output=='advanced':
-                    return {'result':self.generate_apa_citation(get_reranked_pub, api = api_target), 'score':score, f'{api_target}_id':pub_id, 'doi':pub_doi, 'url':url,'full-publication':get_reranked_pub} 
-            else:
-                return {}
-                    
-        else:
+        if not pubs:
             return {}
 
-    def link_citation_ensemble(self, citation, output='simple', api_targets=['openalex', 'openaire', 'pubmed', 'crossref', 'hal']):
-        """
-        Calls link_citation on multiple API targets and selects the most frequent DOI for cross-validation.
+        # Format candidate citations and classify best match
+        cits = [self.generate_apa_citation(pub, api=api_target) for pub in pubs]
+        pairwise_scores = [self.select_pipeline(f"{citation} [SEP] {cit}") for cit in cits]
 
-        :param citation: The input citation text.
-        :param output: Output format ('simple' or 'advanced').
-        :param api_targets: List of API targets to query.
-        :return: A dictionary with the best DOI and extract IDs from all sources.
+        # If only one candidate, return it
+        if len(cits) == 1:
+            selected_score = pairwise_scores[0][0]
+            pub = pubs[0]
+            pub_id = self.extract_id(pub, api_target)
+            pub_doi = self.extract_doi(pub, api_target)
+            url = self.get_uri(pub_id, pub_doi, api_target)
+            return self._format_result(cits[0], selected_score, pub_id, pub_doi, url, pub, output, api_target)
+
+        # Choose the most likely correct match using classification scores
+        reranked_pub, best_score = self.get_highest_true_position(pairwise_scores, pubs)
+        if reranked_pub:
+            pub_id = self.extract_id(reranked_pub, api_target)
+            pub_doi = self.extract_doi(reranked_pub, api_target)
+            url = self.get_uri(pub_id, pub_doi, api_target)
+            formatted_cit = self.generate_apa_citation(reranked_pub, api=api_target)
+            return self._format_result(formatted_cit, {"score": best_score}, pub_id, pub_doi, url, reranked_pub, output, api_target)
+
+        return {}
+
+    def _format_result(
+        self, citation: str, score_data: dict, pub_id: Optional[str], doi: Optional[str],
+        url: Optional[str], pub: dict, output: str, api_target: str
+    ) -> Dict[str, Any]:
+        # Helper to format the output result with optional full metadata
+        result = {
+            "result": citation,
+            "score": score_data.get("score", False),
+            f"{api_target}_id": pub_id,
+            "doi": doi,
+            "url": url
+        }
+        if output == "advanced":
+            result["full-publication"] = pub
+        return result
+
+    def link_citation_ensemble(
+        self, citation: str, output: str = 'simple',
+        api_targets: List[str] = ['openalex', 'openaire', 'pubmed', 'crossref', 'hal']
+    ) -> Dict[str, Any]:
+        """
+        Attempts to link a citation using multiple APIs in an ensemble fashion.
+        Selects the most agreed-upon DOI among sources.
         """
         doi_counter = Counter()
-        extract_ids = {}  # Stores extract_id for each source
-        missing_sources = []  # Sources that didn't return a DOI
+        extract_ids = {}
+        missing_sources = []
 
+        # Try to link using each API
         for api in api_targets:
-
-            print(api)
-
-            output = self.link_citation(citation, output="advanced", api_target=api)
-
-            if not output or not isinstance(output, dict) or 'full-publication' not in output:
-                # If output is empty, not a dictionary, or missing 'full-publication', handle appropriately
-                doi = None  # Ensure no DOI processing occurs
-
-                missing_sources.append(api)  # Keep track of sources that failed to find a DOI
-            else:
-                # If the output is valid and contains 'full-publication'
-                try:
-                    doi = output.get('doi', None)
-                    
-                    if doi:  # Only consider non-None DOIs
-                        print(f"Adding DOI to counter: {doi} from {api}")  # Debugging
-                        doi_counter[doi] += 1
-                        extract_id = output.get(f'{api}_id',None)
-                        
-                        if extract_id:
-                            extract_ids[api] = extract_id  # Store the extract_id
-                except KeyError as e:
-                    # Handle the case where 'full-publication' might be missing despite the checks
-                    print(f"KeyError: {e} while processing {api}.")
-                    missing_sources.append(api)  # Append to missing sources
+            try:
+                res = self.link_citation(citation, output="advanced", api_target=api)
+                doi = res.get("doi")
+                if doi:
+                    doi_counter[doi] += 1
+                    extract_ids[api] = res.get(f"{api}_id", None)
+                else:
+                    missing_sources.append(api)
+            except Exception as e:
+                print(f"Error processing API {api}: {e}")
+                missing_sources.append(api)
 
         if not doi_counter:
-            return {"doi": None, "extract_ids": {}}
+            return {"doi": None, "external_ids": {}}
 
-        # Get the most common DOI
+        # Choose DOI with most agreement
         best_doi, _ = doi_counter.most_common(1)[0]
-        # add "https://doi.org/" if this prefix is not before the DOI
-        
-        # Query missing sources using the best DOI
+
+        # Attempt to backfill missing sources with best DOI
         for api in missing_sources:
             pubs = self.search_api({'DOI': [best_doi]}, api=api)
-
-            pub_id = None  # Define pub_id before the conditional block
-
-            if len(pubs) > 0:
-                pub_id = self.extract_id(pubs[0], api)
-
-            if pub_id:  # Check if pub_id is not None before using it
-                extract_ids[api] = pub_id
-            else:
-                extract_ids[api] = None
+            pub_id = self.extract_id(pubs[0], api) if pubs else None
+            extract_ids[f"{api}_id"] = pub_id
 
         return {
             "doi": best_doi,
             "external_ids": extract_ids
         }
+    
+
+    def extract_and_link_from_text(self, text: str, api_target: str = 'openalex') -> Dict[str, Dict[str, Any]]:
+        """
+        Extract citation entities from the provided text and link them to bibliographic data.
+        
+        Args:
+            text (str): The input text from which entities will be extracted.
+            api_target (str): The target API to use for citation linking (default is 'openalex').
+
+        Returns:
+            Dict[str, Dict[str, Any]]: A dictionary where each key is an entity and the value is the linked citation data.
+        """
+        # Step 1: Use the NER pipeline to extract entities from the text
+        ner_entities = self.span_pipeline(text)
+        
+        # Initialize the result dictionary
+        linked_entities = {}
+
+        long_entities = [entity['word'] for entity in ner_entities if len(entity['word']) > 20]
+
+
+        # Step 2: For each entity group, extract each entity and link it
+        for entity in long_entities:
+            # Step 3: Link the entity to a citation using the link_citation method
+            linked_data = self.link_citation(entity, api_target=api_target)
+
+            # Step 4: Add the linked citation data to the result dictionary
+            linked_entities[entity] = linked_data
+
+        return linked_entities

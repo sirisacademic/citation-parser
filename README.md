@@ -9,11 +9,11 @@ References Tractor is a Python package designed to process raw citation texts an
 Citation Parser follows a structured multi-step process to achieve accurate citation linking:
 
 1. **Pre-Screening**: a classification model based on `distilbert/distilbert-base-multilingual-cased` determines whether the given text is a valid citation or not.
-![image](https://github.com/user-attachments/assets/39748a7d-192c-4787-aa35-5827c8f0c9bf)
+![image](docs/preescreening.png)
 3. **Citation Parsing (NER)**: sophisticated Named Entity Recognition (NER) extracts key fields from the citation. The citation is parsed into structured fields using a fine-tuned Named Entity Recognition model. The extracted fields can include:
     - `TITLE`, `AUTHORS`, `VOLUME`, `ISSUE`, `YEAR`, `DOI`, `ISSN`, `ISBN`, `FIRST_PAGE`, `LAST_PAGE`, `JOURNAL`, and `EDITOR`.
 
-![image](https://github.com/user-attachments/assets/8cb6a723-5373-4685-80c0-4a09ae47ad06)
+![image](docs/ner.png)
 
 3. **Candidate Identification**: a set of carefully crafted queries to the OpenAlex API retrieves one or more candidate publications based on the parsed citation fields. The parsed information is used to construct a series of queries to the OpenAlex API, retrieving one or more potential matches for the citation.
 4. **Pairwise Classification**: a pairwise classification model predicts the likelihood of the identified candidates matching the original citation. This model is fine-tuned on a dataset of citation pairs in the format: `"CITATION 1 [SEP] CITATION 2"`. If multiple candidates are retrieved, the publication with the highest likelihood score is returned.
@@ -26,8 +26,8 @@ The best-matching candidate is selected based on the likelihood score and return
 pip install git+https://github.com/sirisacademic/citation-parser.git
 ```
 
-## Usage
-
+## 🚀 Usage
+### 1. Basic Citation Linking
 Here’s a basic example of how to use Citation Parser:
 
 ```python
@@ -52,11 +52,84 @@ The output would look like this:
  'url': 'https://openalex.org/W2082866977'}
 ```
 
-## Parameters
+### 2. Ensemble Linking Across Multiple APIs
+```python
+citation = "Kon Kam King, J., Granjou, C., Fournil, J. and Cécillon, L., 2018. Soil Sciences and the French 4 per 1000 Initiative - The promises of underground carbon, Energy Research and social sciences vol. 45, pp. 144-152"
+
+result = ref_tractor.link_citation_ensemble(
+    citation,
+    output="simple",
+    api_targets=["openalex", "hal", "openaire"]
+)
+```
+
+The output would look like this:
+```python
+{'doi': '10.1016/j.erss.2018.06.024',
+ 'external_ids': {
+        'openalex': 'W2857848549',
+        'openaire': 'doi_dedup___::06daf67745e2c8d310c1effddb6240ab',
+        'hal_id': 'hal-01832903'}}
+```
+### 3. Extract and Link Citations from Raw Text
+```python
+text = '''Our main publications are the following:
+- Ibba M, Söll D (May 2001). "The renaissance of aminoacyl-tRNA synthesis". EMBO Reports. 2 (5): 382–7. doi:10.1093/embo-reports/kve095. PMC 1083889. PMID 11375928. Archived from the original on 1 May 2011.
+- Lengyel P, Söll D (June 1969). "Mechanism of protein biosynthesis". Bacteriological Reviews. 33 (2): 264–301. doi:10.1128/MMBR.33.2.264-301.1969. PMC 378322. PMID 4896351.
+- Rudolph FB (January 1994). "The biochemistry and physiology of nucleotides". The Journal of Nutrition. 124 (1 Suppl): 124S – 127S. doi:10.1093/jn/124.suppl_1.124S. PMID 8283301. Zrenner R, Stitt M, Sonnewald U, Boldt R (2006). "Pyrimidine and purine biosynthesis and degradation in plants". Annual Review of Plant Biology. 57: 805–36. doi:10.1146/annurev.arplant.57.032905.105421. PMID 16669783.
+- Stasolla C, Katahira R, Thorpe TA, Ashihara H (November 2003). "Purine and pyrimidine nucleotide metabolism in higher plants". Journal of Plant Physiology. 160 (11): 1271–95. Bibcode:2003JPPhy.160.1271S. doi:10.1078/0176-1617-01169. PMID 14658380.'''
+
+linked = ref_tractor.extract_and_link_from_text(text, api_target="openalex")
+```
+
+The output would look like:
+```python
+{'Ibba M, Söll D (May 2001). "The renaissance of aminoacyl-tRNA synthesis". EMBO Reports. 2 (5): 382–7. doi:10.1093/embo-reports/kve095. PMC 1083889. PMID 11375928': {'result': 'Michael Ibba, Dieter Söll (2001). The renaissance of aminoacyl‐tRNA synthesis. EMBO Reports, 2 (5) 382-387. doi: 10.1093/embo-reports/kve095',
+  'score': 0.9820373058319092,
+  'openalex_id': 'W1983918957',
+  'doi': '10.1093/embo-reports/kve095',
+  'url': 'https://openalex.org/W1983918957'},
+ 'Lengyel P, Söll D (June 1969). "Mechanism of protein biosynthesis". Bacteriological Reviews. 33 (2): 264–301. doi:10.1128/MMBR.33.2.264-301.1969. PMC 378322. PMID 4896351': {'result': 'P Lengyel, D Söll (1969). Mechanism of protein biosynthesis. Bacteriological Reviews, 33 (2) 264-301. doi: 10.1128/br.33.2.264-301.1969',
+  'score': 0.9824202060699463,
+  'openalex_id': 'W2099131547',
+  'doi': '10.1128/br.33.2.264-301.1969',
+  'url': 'https://openalex.org/W2099131547'},
+ 'Rudolph FB (January 1994). "The biochemistry and physiology of nucleotides". The Journal of Nutrition. 124 (1 Suppl): 124S – 127S. doi:10.1093/jn/124.suppl_1.124S. PMID 8283301': {'result': 'Frederick B Rudolph (1994). The Biochemistry and Physiology of Nucleotides. Journal of Nutrition, 124 (13) 124S-127S. doi: 10.1093/jn/124.suppl_1.124s',
+  'score': 0.9554430246353149,
+  'openalex_id': 'W1592790847',
+  'doi': '10.1093/jn/124.suppl_1.124s',
+  'url': 'https://openalex.org/W1592790847'},
+ ' Zrenner R, Stitt M, Sonnewald U, Boldt R (2006). "Pyrimidine and purine biosynthesis and degradation in plants". Annual Review of Plant Biology. 57: 805–36. doi:10.1146/annurev.arplant.57.032905.105421. PMID 16669783': {'result': 'Rita Zrenner, Mark Stitt, Uwe Sonnewald, et al. (2006). PYRIMIDINE AND PURINE BIOSYNTHESIS AND DEGRADATION IN PLANTS. Annual Review of Plant Biology, 57 (1) 805-836. doi: 10.1146/annurev.arplant.57.032905.105421',
+  'score': 0.9787797331809998,
+  'openalex_id': 'W2128896661',
+  'doi': '10.1146/annurev.arplant.57.032905.105421',
+  'url': 'https://openalex.org/W2128896661'},
+ 'Stasolla C, Katahira R, Thorpe TA, Ashihara H (November 2003). "Purine and pyrimidine nucleotide metabolism in higher plants". Journal of Plant Physiology. 160 (11): 1271–95. Bibcode:2003JPPhy.160.1271S. doi:10.1078/0176-1617-01169. PMID 14658380': {'result': 'Claudio Stasolla, Riko Katahira, Trevor A. Thorpe, et al. (2003). Purine and pyrimidine nucleotide metabolism in higher plants. Journal of Plant Physiology, 160 (11) 1271-1295. doi: 10.1078/0176-1617-01169',
+  'score': 0.9806508421897888,
+  'openalex_id': 'W2031211089',
+  'doi': '10.1078/0176-1617-01169',
+  'url': 'https://openalex.org/W2031211089'}}
+```
+
+## ⚙️ Functions and Parameters
+
+### 🧠 Available Functions
+
+> `link_citation(citation: str, api_target: str, output: str = 'simple')`: 
+Links a single citation string to a publication in the selected API.
+
+> `link_citation_ensemble(citation: str, output: str = 'simple', api_targets: list)`: Queries multiple APIs, performs majority voting among returned DOIs, and returns the most  agreed-upon match.
+
+> `extract_and_link_from_text(text: str, api_target: str)`: Scans an entire text body to detect and extract citation spans using a built-in citation span detector. Each detected citation is then parsed and linked to the selected scholarly database.
+
+### Common Parameters Across Methods
+
 - **api_target**: Specifcy knowledge graphs to query. Options include:
     - `openalex` - [*default*] Links to OpenAlex
     - `openaire` - Links to OpenAIRE
     - `pubmed` - Links to PubMed
+    - `hal` - Links to HAL
+    - `crossref` - Links to CrossRef
 - **output**: Specifies the type of result returned:
     - `simple` – Returns a concise, structured citation match.
     - `full` – Returns a detailed, full citation with additional metadata.

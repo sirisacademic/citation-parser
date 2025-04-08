@@ -140,7 +140,7 @@ class OpenAlexStrategy(BaseAPIStrategy):
             max_retries = 3
             for attempt in range(max_retries):
                 try:
-                    response = requests.get(api_url, timeout=2)  # Set timeout to 2 seconds
+                    response = requests.get(api_url, timeout=5)  # Set timeout to 2 seconds
                     if response.status_code == 200:
                         results = response.json().get("results", [])
                         candidates.extend(results)
@@ -208,7 +208,7 @@ class OpenAIREStrategy(BaseAPIStrategy):
             max_retries = 3
             for attempt in range(max_retries):
                 try:
-                    response = requests.get(api_url, timeout=2)  # Set timeout to 2 seconds
+                    response = requests.get(api_url, timeout=5)  # Set timeout to 2 seconds
                     if response.status_code == 200:
                         try:
                             json_response = response.json()
@@ -399,7 +399,7 @@ class CrossRefStrategy(BaseAPIStrategy):
             max_retries = 3
             for attempt in range(max_retries):
                 try:
-                    response = requests.get(api_url, timeout=2)
+                    response = requests.get(api_url, timeout=5)
                     if response.status_code == 200:
                         data = response.json()
                         items = data.get("message", {}).get("items", [])
@@ -513,7 +513,7 @@ class HALSearchStrategy(BaseAPIStrategy):
             max_retries = 3
             for attempt in range(max_retries):
                 try:
-                    response = requests.get(api_url, timeout=3)  # 3-second timeout
+                    response = requests.get(api_url, timeout=5)  # 3-second timeout
                     if response.status_code == 200:
                         docs = response.json().get("response", {}).get("docs", [])
                         candidates.extend(docs)
