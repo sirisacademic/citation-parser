@@ -21,12 +21,42 @@ from transformers import (
 from datasets import Dataset
 from transformers.pipelines.pt_utils import KeyDataset
 
-# Import internal search and citation formatting tools
-from .search import search_api
-from .search import citation_formatter
+def _safe_import():
+    """Safely import internal modules with fallback handling"""
+    # Try absolute imports first (works with pip install)
+    try:
+        from references_tractor.search import search_api
+        from references_tractor.search import citation_formatter
+        from references_tractor.utils.entity_validation import EntityValidator
+        return search_api, citation_formatter, EntityValidator
+    except ImportError:
+        # Fallback to relative imports (works with -e install and development)
+        try:
+            from .search import search_api
+            from .search import citation_formatter
+            from .utils.entity_validation import EntityValidator
+            return search_api, citation_formatter, EntityValidator
+        except ImportError:
+            # Final fallback for development/testing
+            import sys
+            import os
+            from pathlib import Path
+            
+            # Add project root to path
+            current_dir = Path(__file__).parent
+            project_root = current_dir.parent if current_dir.name == 'references_tractor' else current_dir
+            sys.path.insert(0, str(project_root))
+            
+            try:
+                from references_tractor.search import search_api
+                from references_tractor.search import citation_formatter
+                from references_tractor.utils.entity_validation import EntityValidator
+                return search_api, citation_formatter, EntityValidator
+            except ImportError as e:
+                raise ImportError(f"Could not import required modules. Please ensure references_tractor is properly installed. Error: {e}")
 
-# Import NER entity cleaner/validator
-from .utils.entity_validation import EntityValidator
+# Import internal modules
+search_api, citation_formatter, EntityValidator = _safe_import()
 
 class ReferencesTractor:
     """

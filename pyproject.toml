@@ -67,12 +67,21 @@ performance = [
     "flash-attn>=2.0.0; sys_platform != 'darwin'",  # For faster ModernBERT inference
 ]
 
+# Explicit package discovery and data inclusion
 [tool.setuptools]
-packages = ["references_tractor", "references_tractor.search"]
+# Automatically find all packages
+packages = ["references_tractor", "references_tractor.search", "references_tractor.utils"]
 include-package-data = true
 
+# ENHANCED: Ensure all necessary files are included
 [tool.setuptools.package-data]
 references_tractor = ["*.txt", "*.json"]
+"references_tractor.search" = ["*.py"]
+"references_tractor.utils" = ["*.py"]
+
+# ENHANCED: Include data files in package
+[tool.setuptools.package-dir]
+references_tractor = "references_tractor"
 
 # Optional: Add tool configurations
 [tool.black]
