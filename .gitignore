@@ -67,10 +67,19 @@ __pycache__
 
 # python build stuff
 *egg-info
+build
 
 # node stuff
 package-lock.json
 test
 test/*
 
-build
+# Backups
+
+*bkp*
+*BKP*
+
+# Environment
+
+refenv
+

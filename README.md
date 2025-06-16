@@ -111,6 +111,57 @@ The output would look like:
   'url': 'https://openalex.org/W2031211089'}}
 ```
 
+### 4. Access Results of Individual Pipeline Steps
+For advanced users who need to inspect intermediate results or use individual components in custom workflows:
+
+```python
+from references_tractor import ReferencesTractor
+
+# Initialize the parser
+ref_tractor = ReferencesTractor()
+
+citation = "Smith, J. (2023). Machine Learning in Practice. Nature, 123, 456-789."
+
+# Step 1: Validate if text is a citation
+prescreening_result = ref_tractor.prescreening_pipeline(citation)[0]
+is_citation = prescreening_result["label"] == "True"
+confidence = prescreening_result.get("score", 0)
+print(f"Is citation: {is_citation} (confidence: {confidence:.3f})")
+
+if is_citation:
+    # Step 2: Extract named entities
+    entities = ref_tractor.process_ner_entities(citation)
+    print(f"Extracted entities: {entities}")
+    # Output: {'AUTHORS': ['Smith, J.'], 'YEAR': ['2023'], 'TITLE': ['Machine Learning in Practice'], ...}
+    
+    # Step 3: Search for candidates
+    candidates = ref_tractor.search_api(entities, api="openalex")
+    print(f"Found {len(candidates)} candidates")
+    
+    # Step 4: Format and score candidates
+    if candidates:
+        formatted_citations = [
+            ref_tractor.generate_apa_citation(pub, api="openalex") 
+            for pub in candidates
+        ]
+        
+        scores = [
+            ref_tractor.select_pipeline(f"{citation} [SEP] {formatted_cit}")[0]
+            for formatted_cit in formatted_citations
+        ]
+        
+        # Find best match
+        best_idx = max(range(len(scores)), key=lambda i: scores[i].get('score', 0))
+        print(f"Best match: {formatted_citations[best_idx]}")
+        print(f"Confidence: {scores[best_idx].get('score', 0):.3f}")
+```
+
+This approach allows you to:
+- **Debug citation linking issues** by inspecting each step
+- **Use NER models for other applications** (e.g., bibliography analysis)
+- **Implement custom search strategies** using extracted entities
+- **Build hybrid workflows** combining your logic with our models
+
 ## ⚙️ Functions and Parameters
 
 ### 🧠 Available Functions

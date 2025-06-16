@@ -1,6 +1,6 @@
-# __init__.py
+from .core import ReferencesTractor
+from .utils.entity_validation import EntityValidator
+from .utils.citation_evaluator import CitationEvaluator
 
-from .references_tractor import ReferencesTractor  # Import the main CitationParser class
+__all__ = ['ReferencesTractor', 'EntityValidator', 'CitationEvaluator']
 
-# Optionally, define what’s accessible when importing * from this package
-__all__ = ["ReferencesTractor"]
