@@ -75,9 +75,9 @@ def main():
     parser.add_argument(
         "--device",
         type=str,
-        default="cpu",
-        choices=["cpu", "cuda"],
-        help="Device to use for model inference (default: cpu)"
+        default="auto",
+        choices=["auto", "cpu", "cuda", "mps"],
+        help="Device to use for model inference. 'auto' detects best available device (default: auto)"
     )
     
     parser.add_argument(

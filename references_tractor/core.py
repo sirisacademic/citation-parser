@@ -41,10 +41,19 @@ class ReferencesTractor:
         select_model_path: str = "SIRIS-Lab/citation-parser-SELECT",
         prescreening_model_path: str = "SIRIS-Lab/citation-parser-TYPE",
         span_model_path: str = "SIRIS-Lab/citation-parser-SPAN",
-        device: Union[int, str] = "cpu",
+        device: Union[int, str] = "auto",
         enable_caching: bool = True,
         cache_size_limit: int = 1000,
     ):
+        # Auto-detect device if not specified
+        if device == "auto":
+            device = self._detect_best_device()
+            print(f"Auto-detected device: {device}")
+        elif device == "cpu":
+            print("Using CPU for model inference")
+        else:
+            print(f"Using specified device: {device}")
+        
         # Initialize three different transformer pipelines:
         # 1. NER for citation entity extraction
         # 2. Selection model to rank possible citation matches
@@ -61,20 +70,72 @@ class ReferencesTractor:
         self._citation_cache = {}
         self._cache_stats = {'hits': 0, 'misses': 0, 'size': 0}
 
+    def _detect_best_device(self) -> str:
+        """
+        Auto-detect the best available device for model inference
+        Returns: device string ("cuda", "mps", or "cpu")
+        """
+        try:
+            import torch
+            
+            # Check for NVIDIA CUDA GPU
+            if torch.cuda.is_available():
+                gpu_count = torch.cuda.device_count()
+                gpu_name = torch.cuda.get_device_name(0) if gpu_count > 0 else "Unknown"
+                print(f"CUDA GPU detected: {gpu_name} (GPU count: {gpu_count})")
+                return "cuda"
+            
+            # Check for Apple Silicon MPS (Metal Performance Shaders)
+            elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+                print("Apple Silicon GPU (MPS) detected")
+                return "mps"
+            
+            # Fallback to CPU
+            else:
+                import multiprocessing
+                cpu_count = multiprocessing.cpu_count()
+                print(f"No GPU detected, using CPU ({cpu_count} cores)")
+                return "cpu"
+                
+        except ImportError:
+            print("PyTorch not found, defaulting to CPU")
+            return "cpu"
+        except Exception as e:
+            print(f"Error during device detection: {e}, defaulting to CPU")
+            return "cpu"
+
     def _init_pipeline(
         self, task: str, model_path: str, device: Union[int, str], agg_strategy: Optional[str] = None
     ):
-        # Helper to initialize the appropriate transformer pipeline
-        kwargs = {
-            "model": AutoModelForTokenClassification.from_pretrained(model_path)
-            if task == "ner"
-            else AutoModelForSequenceClassification.from_pretrained(model_path),
-            "tokenizer": AutoTokenizer.from_pretrained(model_path),
-            "device": device,
-        }
-        if agg_strategy:
-            kwargs["aggregation_strategy"] = agg_strategy
-        return pipeline(task, **kwargs)
+        # Helper to initialize the appropriate transformer pipeline with enhanced device handling
+        try:
+            kwargs = {
+                "model": AutoModelForTokenClassification.from_pretrained(model_path)
+                if task == "ner"
+                else AutoModelForSequenceClassification.from_pretrained(model_path),
+                "tokenizer": AutoTokenizer.from_pretrained(model_path),
+                "device": device,
+            }
+            if agg_strategy:
+                kwargs["aggregation_strategy"] = agg_strategy
+            
+            pipeline_obj = pipeline(task, **kwargs)
+            
+            # Verify device placement
+            actual_device = next(pipeline_obj.model.parameters()).device
+            print(f"{task.upper()} model loaded on device: {actual_device}")
+            
+            return pipeline_obj
+            
+        except Exception as e:
+            print(f"Error loading {task} model on {device}: {e}")
+            print("Falling back to CPU...")
+            
+            # Fallback to CPU
+            kwargs["device"] = "cpu"
+            pipeline_obj = pipeline(task, **kwargs)
+            print(f"{task.upper()} model loaded on CPU (fallback)")
+            return pipeline_obj
 
     def _generate_cache_key(self, citation: str, api_target: str, output: str) -> str:
         """Generate a consistent cache key for the given parameters"""
