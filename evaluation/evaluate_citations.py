@@ -27,19 +27,38 @@ from pathlib import Path
 import traceback
 from datetime import datetime
 
-# Add the project root to Python path if needed
-project_root = Path(__file__).parent
+# FIXED: Correctly determine project root
+current_file = Path(__file__).absolute()
+if current_file.parent.name == "evaluation":
+    # Running from evaluation/ directory or as evaluation/script.py
+    project_root = current_file.parent.parent
+else:
+    # Running from project root
+    project_root = current_file.parent
+
+print(f"Script location: {current_file}")
+print(f"Project root: {project_root}")
+
+# Add project root to Python path if needed
 if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
+    print(f"Added project root to Python path")
 
 try:
     from references_tractor import ReferencesTractor
-    from references_tractor.utils import CitationEvaluator
+    print("ReferencesTractor import successful")
 except ImportError as e:
-    print(f"Error importing required modules: {e}")
-    print("Make sure you have the references_tractor package in your path")
+    print(f"Error importing ReferencesTractor: {e}")
+    print(f"Python path: {sys.path[:3]}")
     sys.exit(1)
 
+try:
+    from references_tractor.utils import CitationEvaluator
+    print("CitationEvaluator import successful")
+except ImportError as e:
+    print(f"Error importing CitationEvaluator: {e}")
+    print(f"Available in utils: {list((project_root / 'references_tractor' / 'utils').iterdir())}")
+    sys.exit(1)
 
 def main():
     """Main evaluation script"""
@@ -95,7 +114,7 @@ def main():
     print(f"Started at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"Gold standard: {args.gold_standard}")
     print(f"Output directory: {args.output_dir}")
-    print(f"Device: {args.device}")
+    print(f"Device selection: {args.device}")
     if args.limit:
         print(f"Evaluation limit: {args.limit} citations")
     else:
@@ -103,21 +122,25 @@ def main():
     print()
     
     # Check if gold standard file exists
-    if not os.path.exists(args.gold_standard):
-        print(f"Error: Gold standard file not found: {args.gold_standard}")
+    gold_standard_path = project_root / args.gold_standard
+    if not gold_standard_path.exists():
+        print(f"Error: Gold standard file not found: {gold_standard_path}")
         print("Please check the file path or use --gold-standard to specify the correct path.")
         sys.exit(1)
     
     try:
         # Initialize the citation pipeline
         print("Initializing citation pipeline...")
+        if args.device == "auto":
+            print("Auto-detecting best available device...")
+        
         pipeline = ReferencesTractor(device=args.device)
         print("Pipeline initialized successfully")
         
         # Initialize the evaluator
         print("Loading gold standard and initializing evaluator...")
         evaluator = CitationEvaluator(
-            gold_standard_path=args.gold_standard,
+            gold_standard_path=str(gold_standard_path),
             pipeline=pipeline
         )
         print(f"Loaded {len(evaluator.gold_standard)} citations from gold standard")
@@ -133,12 +156,6 @@ def main():
             print(f"Running full evaluation on {len(evaluator.gold_standard)} citations...")
             print("This may take several minutes...")
         
-        # Set verbose mode if requested
-        if not args.verbose:
-            # Redirect some of the verbose output
-            import io
-            from contextlib import redirect_stdout
-            
         evaluator.run_evaluation(limit=args.limit)
         
         print("\nEvaluation completed successfully!")
@@ -162,7 +179,7 @@ def main():
         print(f"Detailed results saved to: {output_dir}/")
         print(f"Files generated:")
         
-        # List generated files
+        # List generated files - FIXED to include all file types
         result_files = []
         if os.path.exists(output_dir):
             for file in os.listdir(output_dir):
@@ -172,15 +189,15 @@ def main():
         for file in sorted(result_files):
             print(f"   • {file}")
         
-        # Also show file count summary
+        # Show file count summary
         txt_files = [f for f in result_files if f.endswith('.txt')]
         tsv_files = [f for f in result_files if f.endswith('.tsv')]
         json_files = [f for f in result_files if f.endswith('.json')]
         
         print(f"\nFile Summary:")
-        print(f"   • {len(txt_files)} summary files (.txt)")
+        print(f"   • {len(txt_files)} summary/dashboard files (.txt)")
         print(f"   • {len(tsv_files)} data tables (.tsv)")
-        print(f"   • {len(json_files)} full output files (.json)")
+        print(f"   • {len(json_files)} raw data files (.json)")
         print(f"   • {len(result_files)} total files generated")
         
         print(f"\nEvaluation finished at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
@@ -207,47 +224,17 @@ def main():
         print("\nFull error traceback:")
         traceback.print_exc()
         
-        print(f"\n🔧 Troubleshooting tips:")
+        print(f"\nTroubleshooting tips:")
         print("1. Check that all required packages are installed")
         print("2. Verify the gold standard file path and format")
         print("3. Ensure you have internet connectivity for API calls")
         print("4. Try running with --limit 1 to test with a single citation")
         print("5. Use --device cpu if you're having GPU-related issues")
+        print("6. Use --device auto to auto-detect the best available device")
+        print("7. Check GPU memory if using CUDA (models require ~2-4GB VRAM)")
         
         sys.exit(1)
 
 
-def test_setup():
-    """Test if the setup is working correctly"""
-    print("Testing evaluation setup...")
-    
-    try:
-        # Test imports
-        from references_tractor import ReferencesTractor
-        print("ReferencesTractor import successful")
-        
-        # Test pipeline initialization
-        pipeline = ReferencesTractor(device="cpu")
-        print("Pipeline initialization successful")
-        
-        # Test a simple citation
-        test_citation = "Smith, J. (2020). Test paper. Nature, 1, 1-2."
-        result = pipeline.process_ner_entities(test_citation)
-        print(f"NER extraction test successful: {len(result)} entity types found")
-        
-        print("\nSetup test passed! You can run the full evaluation.")
-        
-    except Exception as e:
-        print(f"Setup test failed: {str(e)}")
-        print("\nPlease resolve the issues above before running the evaluation.")
-        return False
-    
-    return True
-
-
 if __name__ == "__main__":
-    # Check if this is a setup test
-    if len(sys.argv) > 1 and sys.argv[1] == "--test-setup":
-        test_setup()
-    else:
-        main()
+    main()
