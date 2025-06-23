@@ -22,11 +22,6 @@ This document provides an overview of the evaluation results for the References 
 
 ## Key Findings
 
-### Best Performing APIs
-1. **HAL** (98.5%) - Excellent accuracy, primarily correctly identifying when citations are not in their database
-2. **PubMed** (76.0%) - Strong performance for biomedical literature
-3. **OpenAlex** (67.5%) - Good general-purpose performance across disciplines
-
 ### API Characteristics
 
 - **HAL**: Specialized repository with very high precision but limited coverage
