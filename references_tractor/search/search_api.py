@@ -12,8 +12,15 @@ from .field_mapper import FieldMapper, DOIResult
 from .progressive_search import SearchOrchestrator, ProgressiveSearchStrategy, ResultDeduplicator
 
 TIMEOUT = 30
-TARGET_COUNT_SINGLE_API = 4
+TARGET_COUNT_SINGLE_API = 1
 TARGET_COUNT_PER_API_ENSEMBLE = 5
+
+print("===================================")
+print("Search parameters")
+print(f"    TIMEOUT={TIMEOUT}")
+print(f"    TARGET_COUNT_SINGLE_API={TARGET_COUNT_SINGLE_API}")
+print(f"    TARGET_COUNT_PER_API_ENSEMBLE={TARGET_COUNT_PER_API_ENSEMBLE}")
+print("===================================")
 
 class BaseAPIStrategy:
     """Base class for API search strategies with enhanced DOI support"""
@@ -141,26 +148,44 @@ class OpenAlexStrategy(BaseAPIStrategy):
                 continue
             
             # Clean and encode value for OpenAlex compatibility
-            cleaned_value = self._clean_openalex_filter_value(str(value))
-            if not cleaned_value:  # Skip if cleaning resulted in empty value
-                continue
+            if key == "title.search" and "|" in str(value):
+                # Handle OR syntax for segmented titles - don't clean as aggressively
+                segments = str(value).split("|")
+                cleaned_segments = []
+                for segment in segments:
+                    cleaned_segment = self._clean_openalex_filter_value(segment)
+                    if cleaned_segment:
+                        cleaned_segments.append(cleaned_segment)
                 
-            encoded_value = self.encode_query_value(cleaned_value)
-            
-            if key == "locations.source.id":
-                filter_parts.append(f"{key}:{encoded_value}")
-            elif key in ["title.search", "raw_author_name.search"]:
-                filter_parts.append(f"{key}:{encoded_value}")
-            elif key in ["publication_year", "doi", "biblio.volume", "biblio.issue", 
-                        "biblio.first_page", "biblio.last_page"]:
-                filter_parts.append(f"{key}:{encoded_value}")
+                if cleaned_segments:
+                    # Encode the OR query properly
+                    or_query = "|".join(cleaned_segments)
+                    encoded_value = self.encode_query_value(or_query)
+                    filter_parts.append(f"{key}:{encoded_value}")
+            else:
+                # Regular cleaning for non-OR queries
+                cleaned_value = self._clean_openalex_filter_value(str(value))
+                if not cleaned_value:
+                    continue
+                encoded_value = self.encode_query_value(cleaned_value)
+                
+                if key == "locations.source.id":
+                    filter_parts.append(f"{key}:{encoded_value}")
+                elif key in ["title.search", "raw_author_name.search"]:
+                    filter_parts.append(f"{key}:{encoded_value}")
+                elif key in ["publication_year", "doi", "biblio.volume", "biblio.issue", 
+                            "biblio.first_page", "biblio.last_page"]:
+                    filter_parts.append(f"{key}:{encoded_value}")
         
         if filter_parts:
             filter_string = ",".join(filter_parts)
-            return f"{base_url}?filter={filter_string}&mailto=info@sirisacademic.com"
+            final_url = f"{base_url}?per-page={TARGET_COUNT_SINGLE_API}&filter={filter_string}&mailto=info@sirisacademic.com"
+            #print(f"DEBUG. URL={final_url}")
+            return final_url
         
-        return base_url
-    
+        return f"{base_url}?per-page={TARGET_COUNT_SINGLE_API}"
+
+
     def _clean_openalex_filter_value(self, value: str) -> str:
         """Clean filter values for OpenAlex compatibility"""
         if not value:
@@ -193,19 +218,29 @@ class OpenAlexStrategy(BaseAPIStrategy):
 class OpenAIREStrategy(BaseAPIStrategy):
     def get_api_name(self) -> str:
         return "openaire"
-    
+        
     def _build_api_url(self, query_params: Dict[str, Any]) -> str:
         """Build OpenAIRE Graph API URL from query parameters"""
         base_url = "https://api.openaire.eu/graph/v1/researchProducts"
         
+        # Handle OR syntax conversion for OpenAIRE
+        processed_params = {}
+        for key, value in query_params.items():
+            if key == "mainTitle" and "|" in str(value):
+                # Convert OpenAlex OR syntax (|) to OpenAIRE OR syntax ( OR )
+                openaire_or_query = "(" + str(value).replace("|", ") OR (") + ")"
+                processed_params[key] = openaire_or_query
+            else:
+                processed_params[key] = value
+        
         # Use parent class encoding method with quote_plus for OpenAIRE
-        encoded_params = self.encode_query_params(query_params, "quote_plus")
+        encoded_params = self.encode_query_params(processed_params, "quote_plus")
         
         if encoded_params:
             params_list = [f"{key}={value}" for key, value in encoded_params.items()]
             query_string = "&".join(params_list)
             final_url = f"{base_url}?{query_string}&pageSize={TARGET_COUNT_SINGLE_API}"
-            
+            #print(f"DEBUG. URL={final_url}")
             return final_url
         
         return f"{base_url}?pageSize={TARGET_COUNT_SINGLE_API}"
@@ -238,9 +273,11 @@ class PubMedStrategy(BaseAPIStrategy):
             search_term = " AND ".join(term_parts)
             # Double encode the complete search term since it contains special characters like [, ], AND
             encoded_search_term = self.encode_query_value(search_term, "quote_plus")
-            return f"{search_url}?db=pubmed&retmode=json&retmax=100&term={encoded_search_term}"
+            final_url = f"{search_url}?db=pubmed&retmode=json&retmax={TARGET_COUNT_SINGLE_API}&term={encoded_search_term}"
+            #print(f"DEBUG. URL={final_url}")
+            return final_url
         
-        return f"{search_url}?db=pubmed&retmode=json&retmax=100"
+        return f"{search_url}?db=pubmed&retmode=json&retmax={TARGET_COUNT_SINGLE_API}"
     
     def _parse_pubmed_xml_to_dict(self, xml_content: str) -> Dict[str, Any]:
         """
@@ -485,9 +522,11 @@ class CrossRefStrategy(BaseAPIStrategy):
         if encoded_params:
             params_list = [f"{key}={value}" for key, value in encoded_params.items()]
             query_string = "&".join(params_list)
-            return f"{base_url}?{query_string}&rows=20"
+            final_url = f"{base_url}?{query_string}&rows={TARGET_COUNT_SINGLE_API}"
+            #print(f"DEBUG. URL={final_url}")
+            return final_url
         
-        return f"{base_url}?rows=20"
+        return f"{base_url}?rows={TARGET_COUNT_SINGLE_API}"
 
 class HALSearchStrategy(BaseAPIStrategy):
     """HAL API search strategy with enhanced DOI support"""
@@ -499,33 +538,27 @@ class HALSearchStrategy(BaseAPIStrategy):
         """Build HAL API URL from query parameters"""
         base_url = "https://api.archives-ouvertes.fr/search/"
         
-        # Build query (HAL uses a single 'q' parameter with field:value syntax)
+        # Build query parts WITHOUT pre-encoding individual values
         query_parts = []
         for key, value in query_params.items():
             if not value:
                 continue
             
-            # HAL has special handling for quoted vs unquoted fields
-            if key in ["title_t", "authFullName_t", "doiId_s", "publicationDateY_s", 
-                      "journalTitle_t", "volume_s", "issue_s", "page_s"]:
-                
-                if key.endswith("_t"):  # Full-text fields - keep quotes but encode content
-                    # Remove existing quotes from the original query building, then add them back
-                    clean_value = value.strip('"')
-                    encoded_value = self.encode_query_value(clean_value)
-                    query_parts.append(f"{key}:\"{encoded_value}\"")
-                else:  # Exact fields - encode the quoted value
-                    clean_value = value.strip('"')
-                    encoded_value = self.encode_query_value(clean_value)
-                    query_parts.append(f"{key}:\"{encoded_value}\"")
+            # Don't encode individual values - just build the query structure
+            if key.endswith("_t"):  # Full-text fields - add quotes
+                query_parts.append(f'{key}:"{value}"')
+            else:  # Exact fields - add quotes  
+                query_parts.append(f'{key}:"{value}"')
         
         if query_parts:
             query_string = " AND ".join(query_parts)
-            # Encode the complete query string for the 'q' parameter
+            # Only encode once - the complete query string
             encoded_query = self.encode_query_value(query_string, "quote_plus")
-            return f"{base_url}?q={encoded_query}&fl=*&wt=json&rows=20"
+            final_url = f"{base_url}?q={encoded_query}&fl=*&wt=json&rows={TARGET_COUNT_SINGLE_API}"
+            #print(f"DEBUG. URL={final_url}")
+            return final_url
         
-        return f"{base_url}?fl=*&wt=json&rows=20"
+        return f"{base_url}?fl=*&wt=json&rows={TARGET_COUNT_SINGLE_API}"
 
 class SearchAPI:
     """Main search API coordinator with enhanced DOI support and reduced verbosity"""

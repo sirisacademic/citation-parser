@@ -21,6 +21,9 @@ from transformers import (
 from datasets import Dataset
 from transformers.pipelines.pt_utils import KeyDataset
 
+THRESHOLD_PARWISE_MODEL = 0.80 # Higher threshold for SELECT model
+THRESHOLD_NER_SIMILARITY = 0.70 # Lower threshold for NER similarity
+
 def _safe_import():
     """Safely import internal modules with fallback handling"""
     # Try absolute imports first (works with pip install)
@@ -59,11 +62,6 @@ def _safe_import():
 search_api, citation_formatter, EntityValidator = _safe_import()
 
 class ReferencesTractor:
-    """
-    Class to extract citation entities, search bibliographic databases, 
-    and generate and link citations to their canonical records.
-    Enhanced with pipeline-level caching to avoid duplicate API calls.
-    """
 
     def __init__(
         self,
@@ -74,6 +72,8 @@ class ReferencesTractor:
         device: Union[int, str] = "auto",
         enable_caching: bool = True,
         cache_size_limit: int = 1000,
+        select_threshold: float = THRESHOLD_PARWISE_MODEL,
+        ner_threshold: float = THRESHOLD_NER_SIMILARITY
     ):
         # Auto-detect device if not specified
         if device == "auto":
@@ -99,6 +99,11 @@ class ReferencesTractor:
         self.cache_size_limit = cache_size_limit
         self._citation_cache = {}
         self._cache_stats = {'hits': 0, 'misses': 0, 'size': 0}
+
+        # Initialize thresholds
+        self.select_threshold = select_threshold
+        self.ner_threshold = ner_threshold
+        
 
     def _detect_best_device(self) -> str:
         """
@@ -153,18 +158,22 @@ class ReferencesTractor:
             
             # Verify device placement
             actual_device = next(pipeline_obj.model.parameters()).device
-            print(f"{task.upper()} model loaded on device: {actual_device}")
+            
+            # More specific logging based on model path
+            model_name = model_path.split('/')[-1].replace('citation-parser-', '').upper()
+            print(f"{model_name} model loaded on device: {actual_device}")
             
             return pipeline_obj
             
         except Exception as e:
-            print(f"Error loading {task} model on {device}: {e}")
+            model_name = model_path.split('/')[-1].replace('citation-parser-', '').upper()
+            print(f"Error loading {model_name} model on {device}: {e}")
             print("Falling back to CPU...")
             
             # Fallback to CPU
             kwargs["device"] = "cpu"
             pipeline_obj = pipeline(task, **kwargs)
-            print(f"{task.upper()} model loaded on CPU (fallback)")
+            print(f"{model_name} model loaded on CPU (fallback)")
             return pipeline_obj
 
     def _generate_cache_key(self, citation: str, api_target: str, output: str) -> str:
@@ -221,25 +230,238 @@ class ReferencesTractor:
         formatter = citation_formatter.CitationFormatterFactory.get_formatter(api)
         return formatter.generate_apa_citation(data)
 
+    def compute_ner_similarity(self, original_citation: str, candidate_citation: str) -> float:
+        """
+        Compute similarity between two citations based on NER-extracted fields.
+        Returns a score between 0.0 and 1.0, where 1.0 is perfect match.
+        
+        Args:
+            original_citation: The input citation string
+            candidate_citation: The formatted candidate citation to compare
+            
+        Returns:
+            float: Similarity score between 0.0 and 1.0
+        """
+        import re
+        from difflib import SequenceMatcher
+        
+        # Extract NER entities from both citations
+        original_entities = self.process_ner_entities(original_citation)
+        candidate_entities = self.process_ner_entities(candidate_citation)
+        
+        total_score = 0.0
+        field_weights = {
+            'TITLE': 0.6,
+            'AUTHORS': 0.3,
+            'PUBLICATION_YEAR': 0.2,
+            'DOI': 0.05
+        }
+        
+        def normalize_text(text):
+            """Normalize text for comparison"""
+            if not text:
+                return ""
+            # Convert to lowercase, remove extra spaces, punctuation
+            text = re.sub(r'[^\w\s]', ' ', text.lower())
+            text = re.sub(r'\s+', ' ', text).strip()
+            return text
+        
+        def fuzzy_similarity(text1, text2):
+            """Compute fuzzy string similarity using SequenceMatcher"""
+            if not text1 or not text2:
+                return 0.0
+            norm1 = normalize_text(text1)
+            norm2 = normalize_text(text2)
+            if not norm1 or not norm2:
+                return 0.0
+            return SequenceMatcher(None, norm1, norm2).ratio()
+        
+        def author_similarity(authors1, authors2):
+            """Compute author similarity using fuzzy matching with word overlap"""
+            if not authors1 or not authors2:
+                return 0.0
+            
+            # Simple approach: combine fuzzy similarity with word overlap
+            fuzzy_score = fuzzy_similarity(authors1, authors2)
+            
+            # Extract meaningful words (length > 2, not common words)
+            def extract_author_words(text):
+                # Clean text and extract words
+                clean_text = re.sub(r'[^\w\s]', ' ', text.lower())
+                words = clean_text.split()
+                # Filter out common non-name words and very short words
+                stop_words = {'et', 'al', 'and', 'the', 'of', 'in', 'at', 'to', 'for', 'with'}
+                return [w for w in words if len(w) > 2 and w not in stop_words and not w.isdigit()]
+            
+            words1 = set(extract_author_words(authors1))
+            words2 = set(extract_author_words(authors2))
+            
+            if not words1 or not words2:
+                return fuzzy_score
+            
+            # Calculate word overlap (Jaccard similarity)
+            intersection = len(words1.intersection(words2))
+            union = len(words1.union(words2))
+            word_overlap = intersection / union if union > 0 else 0.0
+            
+            # Combine fuzzy similarity with word overlap
+            return max(fuzzy_score, word_overlap * 0.8)  # Give word overlap slightly less weight
+        
+        def extract_any_year(text):
+            """Extract any 4-digit year from text"""
+            if not text:
+                return None
+            year_match = re.search(r'\b(19|20)\d{2}\b', str(text))
+            return int(year_match.group()) if year_match else None
+        
+        def year_similarity(year1, year2):
+            """Year matching with fallback extraction from any field"""
+            # Try direct extraction first
+            y1 = extract_any_year(year1)
+            y2 = extract_any_year(year2)
+            
+            if y1 is None or y2 is None:
+                return 0.0
+            
+            # Year comparison with tolerance
+            diff = abs(y1 - y2)
+            if diff == 0:
+                return 1.0
+            elif diff == 1:
+                return 0.7  # 1-year difference (common for online/print dates)
+            elif diff == 2:
+                return 0.3  # 2-year difference
+            else:
+                return 0.0
+        
+        def doi_similarity(doi1, doi2):
+            """DOI exact matching"""
+            if not doi1 or not doi2:
+                return 0.0
+            
+            # Normalize DOIs (remove prefixes)
+            def normalize_doi(doi):
+                doi = doi.lower().strip()
+                prefixes = ['https://doi.org/', 'http://doi.org/', 'doi:', 'doi ']
+                for prefix in prefixes:
+                    if doi.startswith(prefix):
+                        doi = doi[len(prefix):]
+                return doi.strip()
+            
+            norm_doi1 = normalize_doi(doi1)
+            norm_doi2 = normalize_doi(doi2)
+            
+            return 1.0 if norm_doi1 == norm_doi2 else 0.0
+        
+        # Calculate field-specific similarities with fallback extraction
+        field_scores = {}
+        
+        # Create combined text for fallback searches
+        orig_combined = f"{original_citation} " + " ".join([" ".join(v) for v in original_entities.values()])
+        cand_combined = f"{candidate_citation} " + " ".join([" ".join(v) for v in candidate_entities.values()])
+        
+        for field, weight in field_weights.items():
+            orig_value = original_entities.get(field, [])
+            cand_value = candidate_entities.get(field, [])
+            
+            # Get first value from lists (cleaned by EntityValidator)
+            orig_text = orig_value[0] if orig_value else ""
+            cand_text = cand_value[0] if cand_value else ""
+            
+            # Generic fallback: if field not found in NER, try extracting from full text
+            if not orig_text and field == 'PUBLICATION_YEAR':
+                orig_text = str(extract_any_year(orig_combined) or "")
+            if not cand_text and field == 'PUBLICATION_YEAR':
+                cand_text = str(extract_any_year(cand_combined) or "")
+            
+            if field == 'TITLE':
+                field_scores[field] = fuzzy_similarity(orig_text, cand_text)
+            elif field == 'AUTHORS':
+                field_scores[field] = author_similarity(orig_text, cand_text)
+            elif field == 'PUBLICATION_YEAR':
+                field_scores[field] = year_similarity(orig_text, cand_text)
+            elif field == 'DOI':
+                field_scores[field] = doi_similarity(orig_text, cand_text)
+            
+            # Add weighted score
+            total_score += field_scores[field] * weight
+        
+        return min(total_score, 1.0)  # Ensure score doesn't exceed 1.0
+
     def get_highest_true_position(
-        self, outputs: List[List[Dict[str, Any]]], inputs: List[Any]
+        self, outputs: List[List[Dict[str, Any]]], inputs: List[Any], 
+        original_citation: str = None, api_target: str = None
     ) -> Tuple[Optional[Any], Optional[float]]:
-        # Return the input with the highest "True" classification score
-        true_scores = [
-            (i, result[0]['score']) if result[0]['label'] is True else (i, 0.0)
-            for i, result in enumerate(outputs)
-        ]
-        if not true_scores:
+
+        # Get True labels with confidence threshold
+        confident_true_scores = []
+        uncertain_true_scores = []
+        
+        for i, result in enumerate(outputs):
+            if result[0]['label'] is True:
+                score = result[0]['score']
+                if score >= self.select_threshold:
+                    confident_true_scores.append((i, score))
+                else:
+                    uncertain_true_scores.append((i, score))
+        
+        # First try confident True labels
+        if confident_true_scores:
+            best_index, best_score = max(confident_true_scores, key=lambda x: x[1])  # Fixed: unpack tuple
+            self._last_scoring_method = 'select_model'
+            return inputs[best_index], best_score
+        
+        # If only uncertain True labels, validate with NER
+        if uncertain_true_scores and original_citation and api_target:
+            validated_candidates = []
+            for i, select_score in uncertain_true_scores:
+                try:
+                    formatted_citation = self.generate_apa_citation(inputs[i], api=api_target)
+                    ner_score = self.compute_ner_similarity(original_citation, formatted_citation)
+                    
+                    if ner_score >= self.ner_threshold:  # NER validation threshold
+                        validated_candidates.append((i, ner_score))  # Use NER score
+
+                except Exception as e:
+                    print(f"Error computing NER for candidate {i}: {e}")
+            
+            if validated_candidates:
+                best_index, best_score = max(validated_candidates, key=lambda x: x[1])  # Fixed: unpack tuple
+                self._last_scoring_method = 'ner_similarity'
+                return inputs[best_index], best_score
+        
+        # Fallback to NER-only similarity (no True labels or validation failed)
+        
+        if not original_citation or not api_target:
             return None, None
-        best_index = max(true_scores, key=lambda x: x[1])[0]
-        return inputs[best_index], true_scores[best_index][1]
-       
+        
+        ner_scores = []
+        for i, pub in enumerate(inputs):
+            try:
+                formatted_citation = self.generate_apa_citation(pub, api=api_target)
+                ner_score = self.compute_ner_similarity(original_citation, formatted_citation)
+                ner_scores.append((i, ner_score))
+            except Exception as e:
+                print(f"Error computing NER similarity for candidate {i}: {e}")
+                ner_scores.append((i, 0.0))
+        
+        if ner_scores:
+            best_index, best_score = max(ner_scores, key=lambda x: x[1])  # Fixed: unpack tuple
+            
+            # Apply NER threshold even in fallback
+            if best_score < self.ner_threshold:
+                return None, None
+            
+            self._last_scoring_method = 'ner_similarity'
+            return inputs[best_index], best_score
+        
+        return None, None
+
     def search_api(self, ner_entities: Dict[str, List[str]], api: str = "openalex", 
                       target_count: int = 10) -> List[dict]:
             # Search a bibliographic API using extracted NER entities with progressive strategy
             return self.searcher.search_api(ner_entities, api=api, target_count=target_count)
         
-
     def get_uri(self, pid: Optional[str], doi: Optional[str], api: str) -> Optional[str]:
         # Construct the canonical URL to the publication based on available identifiers
         uri_templates = {
@@ -253,17 +475,17 @@ class ReferencesTractor:
 
     def extract_id(self, publication: dict, api: str) -> Optional[str]:
         # Extract the publication ID depending on the API source
-        if api == "openalex":
-            return publication.get("id", "").replace("https://openalex.org/", "")
-        elif api == "openaire":
-            return publication.get('header', {}).get('dri:objIdentifier', {}).get('$')
-        elif api == "pubmed":
-            # Now expects parsed dict structure instead of raw XML
-            return publication.get("pmid") or publication.get("id")
-        elif api == "crossref":
-            return publication.get("DOI")
-        elif api == "hal":
-            return publication.get("halId_s")
+        if publication and isinstance(publication, dict):
+            if api == "openalex":
+                return publication.get("id", "").replace("https://openalex.org/", "")
+            elif api == "openaire":
+                return publication.get('id')
+            elif api == "pubmed":
+                return publication.get("pmid") or publication.get("id")
+            elif api == "crossref":
+                return publication.get("DOI")
+            elif api == "hal":
+                return publication.get("halId_s")
         return None
 
     def extract_doi(self, publication: dict, api: str) -> Optional[str]:
@@ -354,14 +576,35 @@ class ReferencesTractor:
         cits = [self.generate_apa_citation(pub, api=api_target) for pub in pubs]
         pairwise_scores = [self.select_pipeline(f"{citation} [SEP] {cit}") for cit in cits]
 
-        # If only one candidate, return it
+        # If only one candidate, check if SELECT model is confident
         if len(cits) == 1:
             selected_score = pairwise_scores[0][0]
             pub = pubs[0]
+            
+            # Check if SELECT model returned False OR low confidence - use NER similarity
+            if selected_score['label'] is False or selected_score['score'] < self.select_threshold:
+                ner_score = self.compute_ner_similarity(citation, cits[0])
+                
+                # Apply NER threshold
+                if ner_score < self.ner_threshold:
+                    result = {}
+                    if self.enable_caching:
+                        self._citation_cache[cache_key] = result.copy()
+                        self._manage_cache_size()
+                    return result
+                
+                # Use NER score
+                final_score = ner_score
+                score_data = {"score": final_score}
+            else:
+                # SELECT model confident and True
+                final_score = selected_score['score']
+                score_data = selected_score
+            
             pub_id = self.extract_id(pub, api_target)
             pub_doi = self.extract_doi(pub, api_target)
             url = self.get_uri(pub_id, pub_doi, api_target)
-            result = self._format_result(cits[0], selected_score, pub_id, pub_doi, url, pub, output, api_target)
+            result = self._format_result(cits[0], score_data, pub_id, pub_doi, url, pub, output, api_target)
             
             if self.enable_caching:
                 self._citation_cache[cache_key] = result.copy()
@@ -369,7 +612,9 @@ class ReferencesTractor:
             return result
 
         # Choose the most likely correct match using classification scores
-        reranked_pub, best_score = self.get_highest_true_position(pairwise_scores, pubs)
+        reranked_pub, best_score = self.get_highest_true_position(
+            pairwise_scores, pubs, citation, api_target
+        )
         if reranked_pub:
             pub_id = self.extract_id(reranked_pub, api_target)
             pub_doi = self.extract_doi(reranked_pub, api_target)
@@ -386,6 +631,7 @@ class ReferencesTractor:
         if self.enable_caching:
             self._citation_cache[cache_key] = result.copy()
             self._manage_cache_size()
+        
         return result
 
     def _format_result(
@@ -425,8 +671,41 @@ class ReferencesTractor:
         
         return result
 
+    def _should_include_in_ensemble_voting(self, result: Dict[str, Any], original_citation: str, api: str) -> bool:
+        """
+        Determine if a result should be included in ensemble DOI voting.
+        
+        Applies the same quality thresholds that individual APIs use to ensure
+        ensemble only considers results that would pass individual API validation.
+        
+        Args:
+            result: The API result to evaluate
+            original_citation: The original citation text for similarity comparison
+            api: The source API name
+            
+        Returns:
+            bool: True if result should contribute to ensemble voting, False otherwise
+        """
+        # Must have a DOI to contribute to ensemble voting
+        main_doi = result.get('main_doi') or result.get('doi')
+        if not main_doi:
+            return False
+        
+        # Apply same quality thresholds as individual APIs
+        formatted_citation = result.get('result')
+        if formatted_citation:
+            try:
+                ner_score = self.compute_ner_similarity(original_citation, formatted_citation)
+                if ner_score < self.ner_threshold:
+                    return False
+            except Exception:
+                return False
+        
+        return True
+
     def link_citation_ensemble(
-            self, citation: str, output: str = 'simple',
+            self, citation: str,
+            output: str = 'simple',
             api_targets: List[str] = ['openalex', 'openaire', 'pubmed', 'crossref', 'hal']
         ) -> Dict[str, Any]:
             """
@@ -443,8 +722,12 @@ class ReferencesTractor:
             # Try to link using each API (these calls will use cache if available)
             for api in api_targets:
                 try:
-                    res = self.link_citation(citation, output="advanced", api_target=api)
-                    
+                    res = self.link_citation(citation, output=output, api_target=api)
+
+                    if not self._should_include_in_ensemble_voting(res, citation, api):
+                        missing_sources.append(api)
+                        continue
+
                     # Store full result for enhanced processing
                     api_results[api] = res
                     

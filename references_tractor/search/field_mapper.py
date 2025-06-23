@@ -184,25 +184,57 @@ class FieldMapper:
         cleaned = re.sub(r'[.,;:\-\s]+$', '', cleaned)
         
         return cleaned if len(cleaned) >= 3 else None
-           
+
+    def segment_title_for_or_search(self, title: str) -> Optional[str]:
+        """Segment title into 2 parts for OR search"""
+        if not title:
+            return None
+        
+        # Clean title first
+        cleaned = self.clean_title(title)
+        if not cleaned or len(cleaned.split()) < 4:  # Too short to segment
+            return cleaned
+        
+        words = cleaned.split()
+        mid_point = len(words) // 2
+        
+        # Split into two halves
+        first_half = " ".join(words[:mid_point]).strip()
+        second_half = " ".join(words[mid_point:]).strip()
+        
+        # Return as OR query
+        return f"{first_half}|{second_half}"
+
     def extract_author_surname(self, authors: str) -> Optional[str]:
-        """Extract surname from author string for search"""
+        """Extract surname from author string for search - Enhanced to remove 'et al' variants"""
         if not authors:
             return None
         
-        # Remove "et al" for OpenAIRE searches
-        cleaned = authors.replace(" et al", "").replace(" et al.", "").strip()
+        # Remove all "et al" variants (universal for all APIs)
+        import re
+        cleaned = re.sub(r'\b(et\s+al\.?|et\s+al\b|&\s*al\.?|and\s+others)\b', '', authors, flags=re.IGNORECASE)
+        cleaned = cleaned.strip()
+        
+        # Remove content in parentheses (affiliations, etc.)
+        cleaned = re.sub(r'\([^)]*\)', '', cleaned)
+        cleaned = cleaned.strip()
+        
+        # Remove trailing commas/punctuation left by removals
+        cleaned = re.sub(r'[,;\s]+$', '', cleaned)
+        
+        if not cleaned:
+            return None
         
         # Handle "LastName, FirstName" format
         if "," in cleaned:
             surname = cleaned.split(",")[0].strip()
-            return surname if surname else None
+            return surname if len(surname) > 1 else None  # Don't return single characters
         
         # Handle "FirstName LastName" format  
         parts = cleaned.split()
         if parts:
             surname = parts[-1].strip()
-            return surname if surname else None
+            return surname if len(surname) > 1 else None  # Don't return single characters
         
         return None
     
@@ -306,7 +338,12 @@ class FieldMapper:
         for field in field_combination:
             try:
                 # Get the value from NER entities with better handling
-                entity_values = ner_entities.get(field, [])
+                # When processing TITLE_SEGMENTED, use TITLE data
+                if field == "TITLE_SEGMENTED":
+                    entity_values = ner_entities.get("TITLE", [])  # Use TITLE data
+                else:
+                    entity_values = ner_entities.get(field, [])
+                
                 if not entity_values:
                     continue
                 

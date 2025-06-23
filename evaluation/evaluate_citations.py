@@ -4,7 +4,13 @@ Citation Linking Evaluation Script
 ==================================
 
 This script evaluates the performance of the citation linking pipeline
-against a human-validated gold standard dataset.
+against a human-validated gold standard dataset using classification metrics.
+
+Features:
+- TP/FP/TN/FN classification metrics
+- Strict vs Loose evaluation modes
+- Comparison tables with gold standard IDs
+- Detailed individual API analysis
 
 Usage:
     python evaluate_citations.py [--limit N] [--output-dir DIR] [--gold-standard PATH]
@@ -19,6 +25,9 @@ Examples:
     # Custom paths
     python evaluate_citations.py --gold-standard my_test.json --output-dir my_results/
 """
+
+EVALUATE_APIS = ["openalex", "openaire", "pubmed", "crossref", "hal"]
+#EVALUATE_APIS = ["pubmed"]
 
 import argparse
 import sys
@@ -36,13 +45,9 @@ else:
     # Running from project root
     project_root = current_file.parent
 
-print(f"Script location: {current_file}")
-print(f"Project root: {project_root}")
-
 # Add project root to Python path if needed
 if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
-    print(f"Added project root to Python path")
 
 try:
     from references_tractor import ReferencesTractor
@@ -65,7 +70,7 @@ def main():
     
     # Parse command line arguments
     parser = argparse.ArgumentParser(
-        description="Evaluate citation linking pipeline performance",
+        description="Evaluate citation linking pipeline with classification metrics",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__
     )
@@ -105,6 +110,21 @@ def main():
         help="Enable verbose output during evaluation"
     )
     
+    parser.add_argument(
+        "--show-preview",
+        action="store_true",
+        help="Show classification metrics preview after evaluation"
+    )
+
+    # Add new argument for evaluation mode (strict or loose)
+    parser.add_argument(
+        "--evaluation-mode",
+        type=str,
+        choices=["strict", "loose"],
+        default="strict",
+        help="Choose evaluation mode: 'strict' or 'loose' (default: strict)"
+    )
+
     args = parser.parse_args()
     
     # Print startup information
@@ -112,9 +132,13 @@ def main():
     print("CITATION LINKING PIPELINE EVALUATION")
     print("="*80)
     print(f"Started at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"Evaluating: {EVALUATE_APIS}")
     print(f"Gold standard: {args.gold_standard}")
     print(f"Output directory: {args.output_dir}")
     print(f"Device selection: {args.device}")
+    print(f"Evaluation Mode: {args.evaluation_mode}")
+    print("Features:")
+    print("  • Strict vs Loose Evaluation")
     if args.limit:
         print(f"Evaluation limit: {args.limit} citations")
     else:
@@ -141,11 +165,12 @@ def main():
         print("Loading gold standard and initializing evaluator...")
         evaluator = CitationEvaluator(
             gold_standard_path=str(gold_standard_path),
-            pipeline=pipeline
+            pipeline=pipeline,
+            apis=EVALUATE_APIS
         )
         print(f"Loaded {len(evaluator.gold_standard)} citations from gold standard")
         
-        # Run the evaluation
+        # Run the evaluation with the selected evaluation mode (strict or loose)
         print("\n" + "="*50)
         print("STARTING EVALUATION")
         print("="*50)
@@ -156,20 +181,35 @@ def main():
             print(f"Running full evaluation on {len(evaluator.gold_standard)} citations...")
             print("This may take several minutes...")
         
-        evaluator.run_evaluation(limit=args.limit)
+        print("Processing each citation through all APIs...")
+        print("Computing classification metrics...")
+        
+        # Pass the evaluation mode to the evaluator's run_evaluation method
+        evaluator.run_evaluation(limit=args.limit, evaluation_mode=args.evaluation_mode)
         
         print("\nEvaluation completed successfully!")
         
-        # Generate and display summary
-        print("\n" + "="*50)
-        print("GENERATING RESULTS")
-        print("="*50)
-        
-        summary = evaluator.generate_summary_dashboard()
-        print(summary)
+        # Show classification metrics preview if requested
+        if args.show_preview or args.verbose:
+            print("\n" + "="*50)
+            print("CLASSIFICATION METRICS PREVIEW") 
+            print("="*50)
+            try:
+                classification_metrics = evaluator.calculate_classification_metrics(args.evaluation_mode)
+                print(f"{'API':<12} {'Accuracy':<10}")
+                print("-" * 50)
+                
+                for api in ['openalex', 'openaire', 'pubmed', 'crossref', 'ensemble']:
+                    if api in classification_metrics:
+                        metrics = classification_metrics[api]
+                        accuracy = metrics['accuracy']
+                        print(f"{api.title():<12} {accuracy:<10.3f}")
+                        
+            except Exception as e:
+                print(f"Error calculating preview metrics: {e}")
         
         # Save all results
-        print(f"\nSaving detailed results to {args.output_dir}/...")
+        print(f"\nSaving results to {args.output_dir}/...")
         output_dir = evaluator.save_results(args.output_dir)
         
         print("\n" + "="*50)
@@ -179,41 +219,22 @@ def main():
         print(f"Detailed results saved to: {output_dir}/")
         print(f"Files generated:")
         
-        # List generated files - FIXED to include all file types
+        # List generated files with descriptions
         result_files = []
         if os.path.exists(output_dir):
             for file in os.listdir(output_dir):
-                if file.endswith(('.txt', '.json', '.tsv')):  # Include TSV files
+                if file.endswith(('.txt', '.json', '.tsv')):
                     result_files.append(file)
         
         for file in sorted(result_files):
-            print(f"   • {file}")
-        
-        # Show file count summary
-        txt_files = [f for f in result_files if f.endswith('.txt')]
-        tsv_files = [f for f in result_files if f.endswith('.tsv')]
-        json_files = [f for f in result_files if f.endswith('.json')]
-        
-        print(f"\nFile Summary:")
-        print(f"   • {len(txt_files)} summary/dashboard files (.txt)")
-        print(f"   • {len(tsv_files)} data tables (.tsv)")
-        print(f"   • {len(json_files)} raw data files (.json)")
-        print(f"   • {len(result_files)} total files generated")
+            print(f"   {file}")
         
         print(f"\nEvaluation finished at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-        
-        # Provide next steps
-        print("\n" + "="*50)
-        print("NEXT STEPS")
-        print("="*50)
-        print("1. Review the summary dashboard above for key insights")
-        print(f"2. Check detailed results in {output_dir}/")
-        print("3. Open the comparison table to see side-by-side API performance")
-        print("4. Review individual API tables for detailed analysis")
-        
+               
         if args.limit:
             print(f"\nThis was a limited evaluation ({args.limit} citations).")
             print("   Run without --limit for full evaluation on all citations.")
+            print("   Use --show-preview for quick metrics preview.")
         
     except KeyboardInterrupt:
         print("\nEvaluation interrupted by user")
@@ -231,10 +252,10 @@ def main():
         print("4. Try running with --limit 1 to test with a single citation")
         print("5. Use --device cpu if you're having GPU-related issues")
         print("6. Use --device auto to auto-detect the best available device")
-        print("7. Check GPU memory if using CUDA (models require ~2-4GB VRAM)")
         
         sys.exit(1)
 
 
 if __name__ == "__main__":
     main()
+

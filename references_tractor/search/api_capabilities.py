@@ -91,6 +91,7 @@ class APICapabilities:
             "ISSUE": SearchFieldConfig("biblio.issue", "exact"),
             "PAGE_FIRST": SearchFieldConfig("biblio.first_page", "exact"),
             "PAGE_LAST": SearchFieldConfig("biblio.last_page", "exact"),
+            "TITLE_SEGMENTED": SearchFieldConfig("title.search", "search", "segment_title_for_or_search"),
         },
         "pubmed": {
             "DOI": SearchFieldConfig("doi", "exact", "clean_doi"),
@@ -106,8 +107,9 @@ class APICapabilities:
         "openaire": {
             "DOI": SearchFieldConfig("pid", "exact", "clean_doi"),
             "TITLE": SearchFieldConfig("mainTitle", "search"),
-            "AUTHORS": SearchFieldConfig("authorFullName", "search"),
+            "AUTHORS": SearchFieldConfig("authorFullName", "search", "extract_author_surname"),
             "PUBLICATION_YEAR": SearchFieldConfig("fromPublicationDate", "range", "year_to_date_range"),
+            "TITLE_SEGMENTED": SearchFieldConfig("mainTitle", "search", "segment_title_for_or_search"),
         },
         "crossref": {
             "DOI": SearchFieldConfig("query", "search", "clean_doi"),
@@ -119,16 +121,16 @@ class APICapabilities:
         "hal": {
             "DOI": SearchFieldConfig("doiId_s", "exact", "clean_doi"),
             "TITLE": SearchFieldConfig("title_t", "search"),
-            "AUTHORS": SearchFieldConfig("authFullName_t", "search"),
+            "AUTHORS": SearchFieldConfig("authFullName_t", "search", "extract_author_surname"),
             "PUBLICATION_YEAR": SearchFieldConfig("publicationDateY_s", "exact"),
             "JOURNAL": SearchFieldConfig("journalTitle_t", "search"),
             "VOLUME": SearchFieldConfig("volume_s", "exact"),
             "ISSUE": SearchFieldConfig("issue_s", "exact"),
-            "PAGE_FIRST": SearchFieldConfig("page_s", "search"),  # HAL uses single field
-            "PAGE_LAST": SearchFieldConfig("page_s", "search"),   # Same field as first page
+            "PAGE_FIRST": SearchFieldConfig("page_s", "search"),
+            "PAGE_LAST": SearchFieldConfig("page_s", "search"),
         }
     }
-    
+
     # API-specific retry configurations
     RETRY_CONFIGS = {
         "openalex": RetryConfig(
@@ -138,22 +140,22 @@ class APICapabilities:
             timeout=20
         ),
         "openaire": RetryConfig(
-            max_retries=3,
-            base_delay=1.2,
-            rate_limit_delay=0.6,
-            timeout=25
+            max_retries=5,
+            base_delay=2.0,
+            rate_limit_delay=1.0,
+            timeout=45
         ),
         "crossref": RetryConfig(
-            max_retries=4,  # CrossRef needs more retries
-            base_delay=2.0,  # Longer delays for CrossRef
-            rate_limit_delay=1.0,  # More conservative rate limiting
-            timeout=45  # Longer timeout for CrossRef
+            max_retries=5,
+            base_delay=2.0,
+            rate_limit_delay=1.0,
+            timeout=45
         ),
         "pubmed": RetryConfig(
-            max_retries=3,
-            base_delay=1.5,
-            rate_limit_delay=0.8,
-            timeout=30
+            max_retries=5,
+            base_delay=2.0,
+            rate_limit_delay=1.2,
+            timeout=60
         ),
         "hal": RetryConfig(
             max_retries=3,
@@ -174,6 +176,13 @@ class APICapabilities:
             ["TITLE", "PUBLICATION_YEAR"],
             ["TITLE", "AUTHORS"],
             ["TITLE"],
+            # Segmented title combinations (medium precision)
+            ["TITLE_SEGMENTED", "PUBLICATION_YEAR", "AUTHORS", "JOURNAL"],
+            ["TITLE_SEGMENTED", "PUBLICATION_YEAR", "AUTHORS"],
+            ["TITLE_SEGMENTED", "PUBLICATION_YEAR", "JOURNAL"],
+            ["TITLE_SEGMENTED", "PUBLICATION_YEAR"],
+            ["TITLE_SEGMENTED", "AUTHORS"],
+            ["TITLE_SEGMENTED"],
             # NEW: Non-title fallbacks (lower precision)
             ["AUTHORS", "PUBLICATION_YEAR", "JOURNAL", "VOLUME", "PAGE_FIRST"],
             ["AUTHORS", "PUBLICATION_YEAR", "JOURNAL", "VOLUME"],
@@ -205,6 +214,11 @@ class APICapabilities:
             ["TITLE", "PUBLICATION_YEAR"],
             ["TITLE", "AUTHORS"],
             ["TITLE"],
+            # Segmented title combinations (middle precision)
+            ["TITLE_SEGMENTED", "AUTHORS", "PUBLICATION_YEAR"],
+            ["TITLE_SEGMENTED", "PUBLICATION_YEAR"],
+            ["TITLE_SEGMENTED", "AUTHORS"],
+            ["TITLE_SEGMENTED"],
             # Non-title fallback (lower precision)
             ["AUTHORS", "PUBLICATION_YEAR"],
         ],

@@ -154,14 +154,17 @@ class ProgressiveSearchStrategy:
                 else:
                     # Don't retry on client errors (4xx)
                     if 400 <= response.status_code < 500:
+                        print(f"Received error {response.status_code} from {api}. Skipping request without retry.")
                         return []
                     
                     # Retry on server errors (5xx)
                     if attempt < config.max_retries - 1:
+                        print(f"Received error {response.status_code} from {api}. Retrying...")
                         delay = self._calculate_delay(attempt, api, config)
                         time.sleep(delay)
                         continue
                     else:
+                        print(f"Received error {response.status_code} from {api}. Skipping request after all retry attempts failed.")
                         return []
                     
             except requests.exceptions.Timeout as e:
@@ -257,11 +260,16 @@ class ProgressiveSearchStrategy:
             if len(all_candidates) >= target_count:
                 break
             
-            available_combination = [
-                field for field in combination 
-                if field in ner_entities and ner_entities[field] and ner_entities[field][0]
-                and APICapabilities.supports_field(api, field)
-            ]
+            available_combination = []
+            for field in combination:
+                if APICapabilities.supports_field(api, field):
+                    # Check if field is available in NER entities
+                    if field == "TITLE_SEGMENTED":
+                        # TITLE_SEGMENTED uses TITLE data but with different preprocessing
+                        if "TITLE" in ner_entities and ner_entities["TITLE"] and ner_entities["TITLE"][0]:
+                            available_combination.append(field)
+                    elif field in ner_entities and ner_entities[field] and ner_entities[field][0]:
+                        available_combination.append(field)
             
             if not available_combination:
                 continue

@@ -1,237 +1,398 @@
-# references-tractor 🚜🖇️🧻🎓
-References Tractor is a Python package designed to process raw citation texts and link them to scholarly knowledge graphs like OpenAlex, OpenAIRE, PubMed, CrossRef, and HAL. It leverages advanced natural language processing techniques powered by three small, fine-tuned language models to deliver accurate and robust citation parsing and linking.
+# References Tractor
 
-![plot](docs/reference_tractor_image.png)
+![References Tractor Logo](https://via.placeholder.com/600x200/2E86AB/FFFFFF?text=References+Tractor)
 
+A comprehensive citation processing and linking system that extracts structured information from raw citation text and links citations to scholarly publications across multiple academic databases.
 
-## 🔨 Key steps of the tools:
+[![PyPI version](https://badge.fury.io/py/references-tractor.svg)](https://badge.fury.io/py/references-tractor)
+[![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
+[![Build Status](https://github.com/sirisacademic/references-tractor/workflows/CI/badge.svg)](https://github.com/sirisacademic/references-tractor/actions)
 
-Citation Parser follows a structured multi-step process to achieve accurate citation linking:
+## 📑 Table of Contents
 
-1. **Pre-Screening**: a classification model based on `distilbert/distilbert-base-multilingual-cased` determines whether the given text is a valid citation or not.
-![image](docs/preescreening.png)
-3. **Citation Parsing (NER)**: sophisticated Named Entity Recognition (NER) extracts key fields from the citation. The citation is parsed into structured fields using a fine-tuned Named Entity Recognition model. The extracted fields can include:
-    - `TITLE`, `AUTHORS`, `VOLUME`, `ISSUE`, `YEAR`, `DOI`, `ISSN`, `ISBN`, `FIRST_PAGE`, `LAST_PAGE`, `JOURNAL`, and `EDITOR`.
+- [🚀 Features](#-features)
+- [📊 System Architecture](#-system-architecture)
+- [🚀 Quick Start](#-quick-start)
+  - [Installation](#installation)
+  - [Basic Usage](#basic-usage)
+  - [Ensemble Linking](#ensemble-linking)
+  - [Batch Text Processing](#batch-text-processing)
+- [🔧 Supported APIs](#-supported-apis)
+- [⚙️ Configuration](#️-configuration)
+  - [Device Selection](#device-selection)
+  - [Caching Configuration](#caching-configuration)
+  - [Custom Model Paths](#custom-model-paths)
+- [📈 Evaluation System](#-evaluation-system)
+  - [Running Evaluations](#running-evaluations)
+  - [Evaluation Metrics](#evaluation-metrics)
+  - [Output Files](#output-files)
+- [🤖 Models](#-models)
+- [🎛️ API Reference](#️-api-reference)
+  - [Core Methods](#core-methods)
+- [📋 Output Formats](#-output-formats)
+  - [Simple Output](#simple-output)
+  - [Advanced Output](#advanced-output)
+  - [Ensemble Output](#ensemble-output)
+- [🔧 Performance Considerations](#-performance-considerations)
+  - [Hardware Requirements](#hardware-requirements)
+  - [Optimization Tips](#optimization-tips)
+- [📚 Documentation](#-documentation)
+- [🤝 Contributing](#-contributing)
+- [📄 License](#-license)
+- [📖 Citation](#-citation)
+- [🆘 Support](#-support)
+- [🙏 Acknowledgments](#-acknowledgments)
 
-![image](docs/ner.png)
+## 🚀 Features
 
-3. **Candidate Identification**: a set of carefully crafted queries to the OpenAlex API retrieves one or more candidate publications based on the parsed citation fields. The parsed information is used to construct a series of queries to the OpenAlex API, retrieving one or more potential matches for the citation.
-4. **Pairwise Classification**: a pairwise classification model predicts the likelihood of the identified candidates matching the original citation. This model is fine-tuned on a dataset of citation pairs in the format: `"CITATION 1 [SEP] CITATION 2"`. If multiple candidates are retrieved, the publication with the highest likelihood score is returned.
+- **Multi-API Citation Linking**: Search across OpenAlex, OpenAIRE, PubMed, CrossRef, and HAL
+- **Advanced NER Processing**: Extract citation entities using transformer-based models
+- **Intelligent Candidate Ranking**: SELECT model for citation matching with confidence scoring
+- **Ensemble Method**: Consensus-based linking using multiple APIs with DOI voting
+- **Progressive Search Strategy**: Adaptive search from restrictive to broad field combinations
+- **Multiple DOI Support**: Handle publications with conference and journal versions
+- **Comprehensive Evaluation**: Classification metrics with detailed performance analysis
+- **Caching System**: Reduce duplicate API calls and improve performance
+- **Device Flexibility**: Auto-detection and support for CPU, CUDA, and Apple Silicon (MPS)
 
-The best-matching candidate is selected based on the likelihood score and returned as the final linked publication.
+## 📊 System Architecture
 
-## 💻 Installation
-
-```bash
-pip install git+https://github.com/sirisacademic/citation-parser.git
+```mermaid
+graph TD
+    A[Raw Citation] --> B[Prescreening Model]
+    B --> C[NER Entity Extraction]
+    C --> D[Progressive API Search]
+    D --> E[Candidate Ranking]
+    E --> F[Result Selection]
+    F --> G[Formatted Citation]
+    
+    D --> H[OpenAlex]
+    D --> I[OpenAIRE] 
+    D --> J[PubMed]
+    D --> K[CrossRef]
+    D --> L[HAL]
+    
+    H --> M[Ensemble Voting]
+    I --> M
+    J --> M
+    K --> M
+    L --> M
+    M --> N[Consensus Result]
 ```
 
-## 🚀 Usage
-### 1. Basic Citation Linking
-Here’s a basic example of how to use Citation Parser:
+## 🚀 Quick Start
+
+### Installation
+
+#### Standard Installation
+```bash
+pip install references-tractor
+```
+
+#### Development Installation
+```bash
+# Clone the repository
+git clone https://github.com/sirisacademic/references-tractor.git
+cd references-tractor
+
+# Install dependencies
+pip install -r requirements.txt
+
+# Install the package
+pip install -e .
+```
+
+#### Optional Dependencies
+```bash
+# For evaluation and analysis
+pip install -e .[evaluation]
+
+# For development tools
+pip install -e .[dev]
+
+# For performance optimization
+pip install -e .[performance]
+```
+
+### Basic Usage
 
 ```python
 from references_tractor import ReferencesTractor
 
-# Initialize the parser
+# Initialize the pipeline
 ref_tractor = ReferencesTractor()
 
-# Raw citation text
-citation = "MURAKAMI, H等: 'Unique thermal behavior of acrylic PSAs bearing long alkyl side groups and crosslinked by aluminum chelate', 《EUROPEAN POLYMER JOURNAL》"
+# Link a single citation
+citation = "Smith, J. et al. Machine Learning in Healthcare. Nature Medicine 25:1234-1240, 2019."
+result = ref_tractor.link_citation(citation, api_target="openalex")
 
-# Parse and link the citation
-result = ref_tractor.link_citation(citation, api_target = "openalex", output = 'simple')
+print(f"Found: {result.get('result', 'No match')}")
+print(f"DOI: {result.get('doi', 'N/A')}")
+print(f"Confidence: {result.get('score', 'N/A')}")
 ```
 
-The output would look like this:
+### Ensemble Linking
+
 ```python
-{'result': 'Hiroto Murakami, Keisuke Futashima, Minoru Nanchi, et al. (2010). Unique thermal behavior of acrylic PSAs bearing long alkyl side groups and crosslinked by aluminum chelate. European Polymer Journal, 47 (3) 378-384. doi: 10.1016/j.eurpolymj.2010.12.012',
- 'score': 0.9697238802909851,
- 'openalex_id': 'W2082866977',
- 'doi': '10.1016/j.eurpolymj.2010.12.012',
- 'url': 'https://openalex.org/W2082866977'}
+# Use multiple APIs for robust linking
+ensemble_result = ref_tractor.link_citation_ensemble(citation)
+
+print(f"Consensus DOI: {ensemble_result.get('doi', 'No consensus')}")
+print(f"External IDs: {ensemble_result.get('external_ids', {})}")
 ```
 
-### 2. Ensemble Linking Across Multiple APIs
-```python
-citation = "Kon Kam King, J., Granjou, C., Fournil, J. and Cécillon, L., 2018. Soil Sciences and the French 4 per 1000 Initiative - The promises of underground carbon, Energy Research and social sciences vol. 45, pp. 144-152"
+### Batch Text Processing
 
-result = ref_tractor.link_citation_ensemble(
-    citation,
-    output="simple",
-    api_targets=["openalex", "hal", "openaire"]
+```python
+# Extract and link citations from text
+text = """
+Recent studies have shown promising results (Smith et al., Nature Medicine, 2019).
+The methodology follows established protocols (Johnson, Science, 2020).
+"""
+
+linked_citations = ref_tractor.extract_and_link_from_text(text)
+for citation, result in linked_citations.items():
+    print(f"Citation: {citation}")
+    print(f"Linked to: {result.get('result', 'No match')}")
+```
+
+## 🔧 Supported APIs
+
+| API | Coverage | Specialization | Website |
+|-----|----------|----------------|---------|
+| **OpenAlex** | Comprehensive academic literature | General scholarly content | [openalex.org](https://openalex.org) |
+| **OpenAIRE** | European research infrastructure | Open access publications | [openaire.eu](https://www.openaire.eu) |
+| **PubMed** | Biomedical literature | Life sciences and medicine | [pubmed.ncbi.nlm.nih.gov](https://pubmed.ncbi.nlm.nih.gov) |
+| **CrossRef** | DOI registry | Published academic content | [crossref.org](https://www.crossref.org) |
+| **HAL** | French open archive | French research publications | [hal.science](https://hal.science) |
+
+## ⚙️ Configuration
+
+### Device Selection
+
+```python
+# Auto-detect best available device
+ref_tractor = ReferencesTractor(device="auto")
+
+# Force specific device
+ref_tractor = ReferencesTractor(device="cuda")  # GPU
+ref_tractor = ReferencesTractor(device="cpu")   # CPU only
+ref_tractor = ReferencesTractor(device="mps")   # Apple Silicon
+```
+
+### Caching Configuration
+
+```python
+# Configure caching behavior
+ref_tractor = ReferencesTractor(
+    enable_caching=True,
+    cache_size_limit=1000
+)
+
+# Check cache performance
+stats = ref_tractor.get_cache_stats()
+print(f"Cache hit rate: {stats['hit_rate']}")
+```
+
+### Custom Model Paths
+
+```python
+# Use custom model locations
+ref_tractor = ReferencesTractor(
+    ner_model_path="path/to/custom/ner/model",
+    select_model_path="path/to/custom/select/model"
 )
 ```
 
-The output would look like this:
-```python
-{'doi': '10.1016/j.erss.2018.06.024',
- 'external_ids': {
-        'openalex': 'W2857848549',
-        'openaire': 'doi_dedup___::06daf67745e2c8d310c1effddb6240ab',
-        'hal_id': 'hal-01832903'}}
-```
-### 3. Extract and Link Citations from Raw Text
-```python
-text = '''Our main publications are the following:
-- Ibba M, Söll D (May 2001). "The renaissance of aminoacyl-tRNA synthesis". EMBO Reports. 2 (5): 382–7. doi:10.1093/embo-reports/kve095. PMC 1083889. PMID 11375928. Archived from the original on 1 May 2011.
-- Lengyel P, Söll D (June 1969). "Mechanism of protein biosynthesis". Bacteriological Reviews. 33 (2): 264–301. doi:10.1128/MMBR.33.2.264-301.1969. PMC 378322. PMID 4896351.
-- Rudolph FB (January 1994). "The biochemistry and physiology of nucleotides". The Journal of Nutrition. 124 (1 Suppl): 124S – 127S. doi:10.1093/jn/124.suppl_1.124S. PMID 8283301. Zrenner R, Stitt M, Sonnewald U, Boldt R (2006). "Pyrimidine and purine biosynthesis and degradation in plants". Annual Review of Plant Biology. 57: 805–36. doi:10.1146/annurev.arplant.57.032905.105421. PMID 16669783.
-- Stasolla C, Katahira R, Thorpe TA, Ashihara H (November 2003). "Purine and pyrimidine nucleotide metabolism in higher plants". Journal of Plant Physiology. 160 (11): 1271–95. Bibcode:2003JPPhy.160.1271S. doi:10.1078/0176-1617-01169. PMID 14658380.'''
+## 📈 Evaluation System
 
-linked = ref_tractor.extract_and_link_from_text(text, api_target="openalex")
-```
+Comprehensive evaluation framework for testing citation linking performance.
 
-The output would look like:
-```python
-{'Ibba M, Söll D (May 2001). "The renaissance of aminoacyl-tRNA synthesis". EMBO Reports. 2 (5): 382–7. doi:10.1093/embo-reports/kve095. PMC 1083889. PMID 11375928': {'result': 'Michael Ibba, Dieter Söll (2001). The renaissance of aminoacyl‐tRNA synthesis. EMBO Reports, 2 (5) 382-387. doi: 10.1093/embo-reports/kve095',
-  'score': 0.9820373058319092,
-  'openalex_id': 'W1983918957',
-  'doi': '10.1093/embo-reports/kve095',
-  'url': 'https://openalex.org/W1983918957'},
- 'Lengyel P, Söll D (June 1969). "Mechanism of protein biosynthesis". Bacteriological Reviews. 33 (2): 264–301. doi:10.1128/MMBR.33.2.264-301.1969. PMC 378322. PMID 4896351': {'result': 'P Lengyel, D Söll (1969). Mechanism of protein biosynthesis. Bacteriological Reviews, 33 (2) 264-301. doi: 10.1128/br.33.2.264-301.1969',
-  'score': 0.9824202060699463,
-  'openalex_id': 'W2099131547',
-  'doi': '10.1128/br.33.2.264-301.1969',
-  'url': 'https://openalex.org/W2099131547'},
- 'Rudolph FB (January 1994). "The biochemistry and physiology of nucleotides". The Journal of Nutrition. 124 (1 Suppl): 124S – 127S. doi:10.1093/jn/124.suppl_1.124S. PMID 8283301': {'result': 'Frederick B Rudolph (1994). The Biochemistry and Physiology of Nucleotides. Journal of Nutrition, 124 (13) 124S-127S. doi: 10.1093/jn/124.suppl_1.124s',
-  'score': 0.9554430246353149,
-  'openalex_id': 'W1592790847',
-  'doi': '10.1093/jn/124.suppl_1.124s',
-  'url': 'https://openalex.org/W1592790847'},
- ' Zrenner R, Stitt M, Sonnewald U, Boldt R (2006). "Pyrimidine and purine biosynthesis and degradation in plants". Annual Review of Plant Biology. 57: 805–36. doi:10.1146/annurev.arplant.57.032905.105421. PMID 16669783': {'result': 'Rita Zrenner, Mark Stitt, Uwe Sonnewald, et al. (2006). PYRIMIDINE AND PURINE BIOSYNTHESIS AND DEGRADATION IN PLANTS. Annual Review of Plant Biology, 57 (1) 805-836. doi: 10.1146/annurev.arplant.57.032905.105421',
-  'score': 0.9787797331809998,
-  'openalex_id': 'W2128896661',
-  'doi': '10.1146/annurev.arplant.57.032905.105421',
-  'url': 'https://openalex.org/W2128896661'},
- 'Stasolla C, Katahira R, Thorpe TA, Ashihara H (November 2003). "Purine and pyrimidine nucleotide metabolism in higher plants". Journal of Plant Physiology. 160 (11): 1271–95. Bibcode:2003JPPhy.160.1271S. doi:10.1078/0176-1617-01169. PMID 14658380': {'result': 'Claudio Stasolla, Riko Katahira, Trevor A. Thorpe, et al. (2003). Purine and pyrimidine nucleotide metabolism in higher plants. Journal of Plant Physiology, 160 (11) 1271-1295. doi: 10.1078/0176-1617-01169',
-  'score': 0.9806508421897888,
-  'openalex_id': 'W2031211089',
-  'doi': '10.1078/0176-1617-01169',
-  'url': 'https://openalex.org/W2031211089'}}
-```
-
-### 4. Access Results of Individual Pipeline Steps
-For advanced users who need to inspect intermediate results or use individual components in custom workflows:
-
-```python
-from references_tractor import ReferencesTractor
-
-# Initialize the parser
-ref_tractor = ReferencesTractor()
-
-citation = "Smith, J. (2023). Machine Learning in Practice. Nature, 123, 456-789."
-
-# Step 1: Validate if text is a citation
-prescreening_result = ref_tractor.prescreening_pipeline(citation)[0]
-is_citation = prescreening_result["label"] == "True"
-confidence = prescreening_result.get("score", 0)
-print(f"Is citation: {is_citation} (confidence: {confidence:.3f})")
-
-if is_citation:
-    # Step 2: Extract named entities
-    entities = ref_tractor.process_ner_entities(citation)
-    print(f"Extracted entities: {entities}")
-    # Output: {'AUTHORS': ['Smith, J.'], 'YEAR': ['2023'], 'TITLE': ['Machine Learning in Practice'], ...}
-    
-    # Step 3: Search for candidates
-    candidates = ref_tractor.search_api(entities, api="openalex")
-    print(f"Found {len(candidates)} candidates")
-    
-    # Step 4: Format and score candidates
-    if candidates:
-        formatted_citations = [
-            ref_tractor.generate_apa_citation(pub, api="openalex") 
-            for pub in candidates
-        ]
-        
-        scores = [
-            ref_tractor.select_pipeline(f"{citation} [SEP] {formatted_cit}")[0]
-            for formatted_cit in formatted_citations
-        ]
-        
-        # Find best match
-        best_idx = max(range(len(scores)), key=lambda i: scores[i].get('score', 0))
-        print(f"Best match: {formatted_citations[best_idx]}")
-        print(f"Confidence: {scores[best_idx].get('score', 0):.3f}")
-```
-
-This approach allows you to:
-- **Debug citation linking issues** by inspecting each step
-- **Use NER models for other applications** (e.g., bibliography analysis)
-- **Implement custom search strategies** using extracted entities
-- **Build hybrid workflows** combining your logic with our models
-
-## ⚙️ Functions and Parameters
-
-### 🧠 Available Functions
-
-> `link_citation(citation: str, api_target: str, output: str = 'simple')`: 
-Links a single citation string to a publication in the selected API.
-
-> `link_citation_ensemble(citation: str, output: str = 'simple', api_targets: list)`: Queries multiple APIs, performs majority voting among returned DOIs, and returns the most  agreed-upon match.
-
-> `extract_and_link_from_text(text: str, api_target: str)`: Scans an entire text body to detect and extract citation spans using a built-in citation span detector. Each detected citation is then parsed and linked to the selected scholarly database.
-
-### Common Parameters Across Methods
-
-- **api_target**: Specifcy knowledge graphs to query. Options include:
-    - `openalex` - [*default*] Links to OpenAlex
-    - `openaire` - Links to OpenAIRE
-    - `pubmed` - Links to PubMed
-    - `hal` - Links to HAL
-    - `crossref` - Links to CrossRef
-- **output**: Specifies the type of result returned:
-    - `simple` – Returns a concise, structured citation match.
-    - `full` – Returns a detailed, full citation with additional metadata.
-- **device**:
-    - `cpu`: Utilises the CPU for model inference, suitable for environments without GPU support. Recommended for smaller workloads or when GPU is unavailable.
-    - `cuda`: Utilises GPUs via CUDA for faster inference. Recommended for environments where GPUs are available and high performance is required.
-
-### Returns
-- result: *dict* with the folling attributues:
-    - `result`: Citation from the linked source.
-    - `score`: Similarity score with the input citatio
-    - `id`: `publication_id` in the target Scholarly Knowledge Graph (OpenAlex, OpenAIRE, or PubMed)
-    - (if `output='full'`) `full-publication`: Publication object from the target API
-
-## Dependencies
-
-Ensure you have all necessary dependencies installed. You can install them using the following command:
+### Running Evaluations
 
 ```bash
-pip install -r requirements.txt
+# Basic evaluation
+python evaluation/evaluate_citations.py
+
+# Limited test run
+python evaluation/evaluate_citations.py --limit 5
+
+# Custom configuration
+python evaluation/evaluate_citations.py \
+    --gold-standard my_test.json \
+    --output-dir results/ \
+    --evaluation-mode loose \
+    --device auto
 ```
 
-## Applications
+### Evaluation Metrics
 
-Citation Parser is ideal for:
-- Automated metadata enrichment: extract structured metadata from raw citation texts.
-- Citation Validation: verify the correctness of citations in manuscripts.
-- Scholarly Database Integration: link citations to knowledge graphs like OpenAlex and OpenAIRE.
+The system provides detailed classification metrics:
 
-## Models
-- 🤗 **TYPE model available at: https://huggingface.co/SIRIS-Lab/citation-parser-TYPE**
-- 🤗 **NER model available at: https://huggingface.co/SIRIS-Lab/citation-parser-ENTITY**
-- 🤗 **SELECT model available at: https://huggingface.co/SIRIS-Lab/citation-parser-SELECT**
+- **Accuracy**: Overall correctness percentage
+- **Correct Matches**: Citations correctly linked to expected results
+- **Correct No Result**: Citations that correctly returned no match
+- **Incorrect Matches**: Wrong links when correct link expected
+- **Incorrect Missing**: No result when correct link expected
+- **Incorrect Spurious**: Unexpected result when no link expected
 
-### 📊 Model Performance Metrics
-The performance of each model used in the Citation Parser is evaluated using the F1 score. Below are the F1 scores for each of the key models involved in citation parsing and linking:
+### Output Files
 
-| Model            | F1 Score |
-|---------------------|----------|
-| **TYPE Model (Citation Pre-screening)**  | 0.941638 |
-| **NER Model (Citation Citation)**  | 0.949772 |
- **SELECT Model (Candidate Selection)**  | 0.846972 |
+- `01_summary_dashboard_*.txt`: Executive summary with comprehensive metrics
+- `02_accuracy_metrics_*.tsv`: Detailed accuracy breakdown
+- `03_comparison_table_*.tsv`: Gold standard vs. results comparison
+- `04_*_detailed_*.tsv`: Individual API performance details
+- `05_results_*.json`: Complete evaluation data
 
-# Future features
-- Improved candidate retrieval: advanced query strategies for ambiguous or incomplete citations.
-- Translation to multilingual input to do multiple searches in both input language and English
+**📖 For detailed evaluation documentation, see [docs/evaluation.md](docs/evaluation.md)**
 
-## 📫 Contact
+## 🤖 Models
 
-For further information, please contact <nicolau.duransilva@sirisacademic.com>.
+The system uses specialized transformer models:
 
-## ⚖️ License
+- **NER Model**: `SIRIS-Lab/citation-parser-ENTITY` - Extract citation entities
+- **SELECT Model**: `SIRIS-Lab/citation-parser-SELECT` - Rank citation candidates
+- **Prescreening Model**: `SIRIS-Lab/citation-parser-TYPE` - Filter valid citations
+- **Span Model**: `SIRIS-Lab/citation-parser-SPAN` - Extract citation spans from text
 
-This work is distributed under a [Apache License, Version 2.0](https://www.apache.org/licenses/LICENSE-2.0).
+## 🎛️ API Reference
+
+### Core Methods
+
+#### `link_citation(citation, api_target='openalex', output='simple')`
+
+Link a single citation to a publication.
+
+**Parameters:**
+- `citation` (str): Raw citation text
+- `api_target` (str): Target API ('openalex', 'openaire', 'pubmed', 'crossref', 'hal')
+- `output` (str): Output detail level ('simple', 'advanced')
+
+#### `link_citation_ensemble(citation, api_targets=None, output='simple')`
+
+Link citation using ensemble method with multiple APIs.
+
+#### `extract_and_link_from_text(text, api_target='openalex')`
+
+Extract citations from text and link them.
+
+#### `process_ner_entities(citation)`
+
+Extract named entities from citation text.
+
+**📖 For complete API documentation, see [docs/api.md](docs/api.md)**
+
+## 📋 Output Formats
+
+### Simple Output
+
+```python
+{
+    "result": "Smith, J. et al. (2019). Machine Learning in Healthcare. Nature Medicine, 25, 1234-1240. DOI: 10.1038/s41591-019-0123-4",
+    "score": 0.95,
+    "openalex_id": "W2963456789",
+    "doi": "10.1038/s41591-019-0123-4",
+    "url": "https://openalex.org/W2963456789"
+}
+```
+
+### Advanced Output
+
+```python
+{
+    "result": "Smith, J. et al. (2019). Machine Learning in Healthcare...",
+    "score": 0.95,
+    "openalex_id": "W2963456789",
+    "doi": "10.1038/s41591-019-0123-4",
+    "main_doi": "10.1038/s41591-019-0123-4",
+    "alternative_dois": ["10.1101/2019.123456"],
+    "total_dois": 2,
+    "all_dois": ["10.1038/s41591-019-0123-4", "10.1101/2019.123456"],
+    "url": "https://openalex.org/W2963456789",
+    "full-publication": { /* Complete metadata */ }
+}
+```
+
+### Ensemble Output
+
+```python
+{
+    "doi": "10.1038/s41591-019-0123-4",
+    "external_ids": {
+        "openalex_id": "W2963456789",
+        "pubmed_id": "31234567",
+        "crossref_id": "10.1038/s41591-019-0123-4"
+    },
+    "ensemble_metadata": {
+        "selected_doi_votes": 3,
+        "total_dois_found": 1,
+        "contributing_apis": ["openalex", "pubmed", "crossref"],
+        "doi_vote_breakdown": {"10.1038/s41591-019-0123-4": 3}
+    }
+}
+```
+
+## 🔧 Performance Considerations
+
+### Hardware Requirements
+
+- **Minimum**: 4GB RAM, CPU-only operation supported
+- **Recommended**: 8GB+ RAM, CUDA-compatible GPU for optimal performance
+- **Apple Silicon**: Native MPS support for M1/M2 Macs
+
+### Optimization Tips
+
+- Use `device="auto"` for automatic hardware detection
+- Enable caching for repeated evaluations
+- Use `limit` parameter for testing and development
+- Consider GPU acceleration for large-scale processing
+
+## 📚 Documentation
+
+| Document | Description |
+|----------|-------------|
+| **[API Reference](docs/api.md)** | Complete API documentation with examples |
+| **[Evaluation System](docs/evaluation.md)** | Comprehensive evaluation framework and metrics |
+| **[Development Examples](docs/examples.md)** | Detailed examples for extending the system |
+| **[Contributing Guide](docs/contribute.md)** | Development setup and contribution guidelines |
+
+## 🤝 Contributing
+
+We welcome contributions! Please see our [Contributing Guidelines](docs/contribute.md) for details on:
+
+- Code style and standards
+- Testing requirements
+- Pull request process
+- Development setup
+
+**📖 For detailed examples of extending the system, see [docs/examples.md](docs/examples.md)**
+
+## 📄 License
+
+This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENSE) file for details.
+
+## 📖 Citation
+
+If you use this software in your research, please cite:
+
+```bibtex
+@software{references_tractor,
+  title={References Tractor: Citation Processing and Linking System},
+  author={Duran-Silva, Nicolau and Accuosto, Pablo and Cortini, Ruggero},
+  year={2024},
+  publisher={SIRIS Lab},
+  url={https://github.com/sirisacademic/references-tractor}
+}
+```
+
+## 🆘 Support
+
+- **Issues**: [GitHub Issues](https://github.com/sirisacademic/references-tractor/issues)
+- **Discussions**: [GitHub Discussions](https://github.com/sirisacademic/references-tractor/discussions)
+
+## 🙏 Acknowledgments
+
+- SIRIS Academic for project support
+- Hugging Face for transformer infrastructure
+- Academic database providers for API access
