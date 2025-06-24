@@ -1,13 +1,9 @@
 # References Tractor
 
-![References Tractor Logo](https://via.placeholder.com/600x200/2E86AB/FFFFFF?text=References+Tractor)
+# references-tractor 🚜🖇️🧻🎓
+References Tractor is a Python package designed to process raw citation texts and link them to scholarly knowledge graphs like OpenAlex, OpenAIRE, PubMed, CrossRef, and HAL. It leverages advanced natural language processing techniques powered by three small, fine-tuned language models to deliver accurate and robust citation parsing and linking.
 
-A comprehensive citation processing and linking system that extracts structured information from raw citation text and links citations to scholarly publications across multiple academic databases.
-
-[![PyPI version](https://badge.fury.io/py/references-tractor.svg)](https://badge.fury.io/py/references-tractor)
-[![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
-[![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
-[![Build Status](https://github.com/sirisacademic/references-tractor/workflows/CI/badge.svg)](https://github.com/sirisacademic/references-tractor/actions)
+![plot](docs/reference_tractor_image.png)
 
 ## 📑 Table of Contents
 
@@ -55,6 +51,25 @@ A comprehensive citation processing and linking system that extracts structured 
 - **Comprehensive Evaluation**: Classification metrics with detailed performance analysis
 - **Caching System**: Reduce duplicate API calls and improve performance
 - **Device Flexibility**: Auto-detection and support for CPU, CUDA, and Apple Silicon (MPS)
+
+## 🔨 Key steps of the tools:
+
+References Tractor follows a structured multi-step process to achieve accurate citation linking:
+
+1. **Pre-Screening**: a classification model based on `distilbert/distilbert-base-multilingual-cased` determines whether the given text is a valid citation or not.
+![image](docs/preescreening.png)
+
+2. **Citation Parsing (NER)**: sophisticated Named Entity Recognition (NER) extracts key fields from the citation. The citation is parsed into structured fields using a fine-tuned Named Entity Recognition model. The extracted fields can include:
+    - `TITLE`, `AUTHORS`, `VOLUME`, `ISSUE`, `YEAR`, `DOI`, `ISSN`, `ISBN`, `FIRST_PAGE`, `LAST_PAGE`, `JOURNAL`, and `EDITOR`.
+
+![image](docs/ner.png)
+
+3. **Candidate Identification**: a set of carefully crafted queries to the scholarly APIs retrieves one or more candidate publications based on the parsed citation fields.
+
+4. **Pairwise Classification**: a pairwise classification model predicts the likelihood of the identified candidates matching the original citation. This model is fine-tuned on a dataset of citation pairs in the format: `"CITATION 1 [SEP] CITATION 2"`. If multiple candidates are retrieved, the publication with the highest likelihood score is returned.
+
+The best-matching candidate is selected based on the likelihood score and returned as the final linked publication.
+
 
 ## 📊 System Architecture
 
