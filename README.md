@@ -1,7 +1,6 @@
-# References Tractor
+# References Tractor 🚜🖇️🧻🎓
 
-# references-tractor 🚜🖇️🧻🎓
-References Tractor is a Python package designed to process raw citation texts and link them to scholarly knowledge graphs like OpenAlex, OpenAIRE, PubMed, CrossRef, and HAL. It leverages advanced natural language processing techniques powered by three small, fine-tuned language models to deliver accurate and robust citation parsing and linking.
+References Tractor (references-tractor) is a Python package designed to process raw citation texts and link them to scholarly knowledge graphs like OpenAlex, OpenAIRE, PubMed, CrossRef, and HAL. It leverages advanced natural language processing techniques powered by three small, fine-tuned language models to deliver accurate and robust citation parsing and linking.
 
 ![plot](docs/reference_tractor_image.png)
 
