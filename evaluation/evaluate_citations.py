@@ -27,7 +27,6 @@ Examples:
 """
 
 EVALUATE_APIS = ["openalex", "openaire", "pubmed", "crossref", "hal"]
-#EVALUATE_APIS = ["pubmed"]
 
 import argparse
 import sys
@@ -124,6 +123,20 @@ def main():
         default="strict",
         help="Choose evaluation mode: 'strict' or 'loose' (default: strict)"
     )
+    
+    parser.add_argument(
+        "--resume-from", 
+        type=str, 
+        default=None,
+        help="Resume evaluation from previous results JSON file"
+    )
+    
+    parser.add_argument(
+        "--skip", 
+        type=int, 
+        default=0,
+        help="Number of citations to skip from the beginning"
+    )
 
     args = parser.parse_args()
     
@@ -184,9 +197,14 @@ def main():
         print("Processing each citation through all APIs...")
         print("Computing classification metrics...")
         
-        # Pass the evaluation mode to the evaluator's run_evaluation method
-        evaluator.run_evaluation(limit=args.limit, evaluation_mode=args.evaluation_mode)
-        
+        # Run the evaluation with resume capability
+        evaluator.run_evaluation(
+            limit=args.limit, 
+            evaluation_mode=args.evaluation_mode,
+            resume_from=args.resume_from,
+            skip_count=args.skip
+        )
+       
         print("\nEvaluation completed successfully!")
         
         # Show classification metrics preview if requested

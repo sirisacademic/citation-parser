@@ -25,7 +25,20 @@ class CitationEvaluator:
         self.gold_standard = self.load_gold_standard()
         self.apis = apis
         self.results = []
-        
+        self.gpu_cleanup_frequency = 10  # Clear GPU cache every N citations
+
+    def _cleanup_gpu_memory(self):
+        """Clean up GPU memory cache"""
+        try:
+            import torch
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                print("GPU cache cleared")
+        except ImportError:
+            pass  # PyTorch not available
+        except Exception as e:
+            print(f"Error clearing GPU cache: {e}")
+
     def load_gold_standard(self) -> Dict[str, Dict[str, str]]:
         """Load gold standard from JSON file"""
         with open(self.gold_standard_path, "r", encoding="utf-8") as f:
@@ -90,6 +103,18 @@ class CitationEvaluator:
             
         except Exception:
             return api_id
+
+    def load_previous_results(self, results_file: str) -> List[Dict]:
+        """Load previous evaluation results from JSON file"""
+        try:
+            with open(results_file, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except FileNotFoundError:
+            print(f"Previous results file not found: {results_file}")
+            return []
+        except json.JSONDecodeError:
+            print(f"Invalid JSON in results file: {results_file}")
+            return []
 
     def determine_final_evaluation(self, result: Dict, expected_gold: Dict, api: str, evaluation_mode: str) -> str:
         """
@@ -365,26 +390,67 @@ class CitationEvaluator:
         
         return citation_result
        
-    def run_evaluation(self, limit: Optional[int] = None, evaluation_mode: str = "strict") -> None:
-        """Run evaluation on all citations (or limited subset)"""
+    def run_evaluation(self, limit: Optional[int] = None, evaluation_mode: str = "strict", 
+                      resume_from: Optional[str] = None, skip_count: int = 0) -> None:
+        """Run evaluation with resume capability and GPU error handling"""
+        
+        # Load previous results if resuming
+        if resume_from:
+            print(f"Loading previous results from: {resume_from}")
+            previous_results = self.load_previous_results(resume_from)
+            
+            if skip_count > 0:
+                # Keep only the first skip_count results (the good ones)
+                self.results = previous_results[:skip_count]
+                print(f"Kept first {len(self.results)} previous results")
+                print(f"Will reprocess from citation {skip_count + 1} onwards")
+                total_to_skip = skip_count
+            else:
+                # Keep all previous results and continue from where we left off
+                self.results = previous_results
+                total_to_skip = len(previous_results)
+                print(f"Loaded {len(self.results)} previous results")
+                print(f"Resuming from citation {total_to_skip + 1}")
+        else:
+            self.results = []
+            total_to_skip = skip_count
+            if skip_count > 0:
+                print(f"Skipping first {skip_count} citations (fresh start)")
+        
         print(f"Starting evaluation with classification metrics...")
         
         citations_to_process = list(self.gold_standard.items())
-        if limit:
+        
+        # Skip citations based on resume or skip parameter
+        if total_to_skip > 0:
+            if total_to_skip >= len(citations_to_process):
+                print(f"Error: Trying to skip {total_to_skip} citations, but only {len(citations_to_process)} available")
+                return
+            citations_to_process = citations_to_process[total_to_skip:]
+            print(f"Processing {len(citations_to_process)} remaining citations")
+        
+        # Apply limit after skipping
+        if limit and len(citations_to_process) > limit:
             citations_to_process = citations_to_process[:limit]
-            print(f"Limited to first {limit} citations for testing")
+            print(f"Limited to {limit} citations after skipping")
         
         for i, (citation, expected_results) in enumerate(citations_to_process):
-            print(f"\n\nProcessing citation {i+1}/{len(citations_to_process)}: {citation[:80]}...")
+            current_index = total_to_skip + i + 1
+            print(f"\n\nProcessing citation {current_index}/{len(self.gold_standard)}: {citation[:80]}...")
             
             try:
                 result = self.evaluate_single_citation(citation, expected_results, evaluation_mode)
                 self.results.append(result)
+                
+                # GPU cache cleanup every N citations
+                if (len(self.results) % self.gpu_cleanup_frequency == 0):
+                    self._cleanup_gpu_memory()
+                    
             except Exception as e:
-                print(f"Failed to process citation {i+1}: {str(e)}")
+                print(f"Failed to process citation {current_index}: {str(e)}")
                 traceback.print_exc()
         
-        print(f"Evaluation completed! Processed {len(self.results)} citations.")
+        print(f"Evaluation completed! Total results: {len(self.results)} citations.")
 
     def generate_summary_dashboard(self, evaluation_mode: str = "strict") -> str:
         """Generate summary dashboard with improved table formatting - updated to match generate_summary_evaluation.py"""

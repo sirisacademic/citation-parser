@@ -21,8 +21,11 @@ from transformers import (
 from datasets import Dataset
 from transformers.pipelines.pt_utils import KeyDataset
 
-THRESHOLD_PARWISE_MODEL = 0.80 # Higher threshold for SELECT model
-THRESHOLD_NER_SIMILARITY = 0.70 # Lower threshold for NER similarity
+THRESHOLD_PARWISE_MODEL = 0.75 # Higher threshold for SELECT model
+THRESHOLD_NER_SIMILARITY = 0.65 # Lower threshold for NER similarity
+
+#THRESHOLD_PARWISE_MODEL = 0.80 # Higher threshold for SELECT model
+#THRESHOLD_NER_SIMILARITY = 0.70 # Lower threshold for NER similarity
 
 def _safe_import():
     """Safely import internal modules with fallback handling"""
@@ -73,8 +76,10 @@ class ReferencesTractor:
         enable_caching: bool = True,
         cache_size_limit: int = 1000,
         select_threshold: float = THRESHOLD_PARWISE_MODEL,
-        ner_threshold: float = THRESHOLD_NER_SIMILARITY
+        ner_threshold: float = THRESHOLD_NER_SIMILARITY,
     ):
+        self._switched_to_cpu = False  # Track if we've switched to CPU due to GPU errors
+
         # Auto-detect device if not specified
         if device == "auto":
             device = self._detect_best_device()
@@ -103,7 +108,6 @@ class ReferencesTractor:
         # Initialize thresholds
         self.select_threshold = select_threshold
         self.ner_threshold = ner_threshold
-        
 
     def _detect_best_device(self) -> str:
         """
@@ -138,6 +142,36 @@ class ReferencesTractor:
         except Exception as e:
             print(f"Error during device detection: {e}, defaulting to CPU")
             return "cpu"
+
+    def _is_cuda_error(self, error: Exception) -> bool:
+        """Check if error is CUDA-related"""
+        error_str = str(error).lower()
+        cuda_indicators = [
+            "cuda error", "cuda out of memory", "cuda kernel errors",
+            "unspecified launch failure", "device-side assertions"
+        ]
+        return any(indicator in error_str for indicator in cuda_indicators)
+    
+    def _switch_to_cpu(self):
+        """Switch all pipelines to CPU after GPU error"""
+        if self._switched_to_cpu:
+            return  # Already switched
+        
+        print("GPU error detected. Switching to CPU for remaining processing...")
+        
+        try:
+            # Reinitialize all pipelines on CPU
+            self.ner_pipeline = self._init_pipeline("ner", "SIRIS-Lab/citation-parser-ENTITY", "cpu", agg_strategy="simple")
+            self.select_pipeline = self._init_pipeline("text-classification", "SIRIS-Lab/citation-parser-SELECT", "cpu")
+            self.prescreening_pipeline = self._init_pipeline("text-classification", "SIRIS-Lab/citation-parser-TYPE", "cpu")
+            self.span_pipeline = self._init_pipeline("ner", "SIRIS-Lab/citation-parser-SPAN", "cpu", agg_strategy="simple")
+            
+            self._switched_to_cpu = True
+            print("Successfully switched to CPU")
+            
+        except Exception as e:
+            print(f"Error switching to CPU: {e}")
+            raise
 
     def _init_pipeline(
         self, task: str, model_path: str, device: Union[int, str], agg_strategy: Optional[str] = None
@@ -545,94 +579,142 @@ class ReferencesTractor:
         - Search target API
         - Format results and rank them
         """
-        # Check cache first if enabled
-        if self.enable_caching:
-            cache_key = self._generate_cache_key(citation, api_target, output)
-            if cache_key in self._citation_cache:
-                self._cache_stats['hits'] += 1
-                return self._citation_cache[cache_key].copy()  # Return copy to avoid mutation
-            else:
-                self._cache_stats['misses'] += 1
         
-        # Prescreen input to ensure it's likely a citation
-        if not self.prescreening_pipeline(citation)[0]["label"]:
-            result = {"error": "This text is not a citation. Please introduce a valid citation."}
+        try:
+        
+        
+            # Check cache first if enabled
             if self.enable_caching:
-                self._citation_cache[cache_key] = result.copy()
-                self._manage_cache_size()
-            return result
+                cache_key = self._generate_cache_key(citation, api_target, output)
+                if cache_key in self._citation_cache:
+                    self._cache_stats['hits'] += 1
+                    return self._citation_cache[cache_key].copy()  # Return copy to avoid mutation
+                else:
+                    self._cache_stats['misses'] += 1
 
-        ner_entities = self.process_ner_entities(citation)
-        pubs = self.search_api(ner_entities, api=api_target, target_count=10)
+            try:
 
-        if not pubs:
-            result = {}
-            if self.enable_caching:
-                self._citation_cache[cache_key] = result.copy()
-                self._manage_cache_size()
-            return result
-
-        # Format candidate citations and classify best match
-        cits = [self.generate_apa_citation(pub, api=api_target) for pub in pubs]
-        pairwise_scores = [self.select_pipeline(f"{citation} [SEP] {cit}") for cit in cits]
-
-        # If only one candidate, check if SELECT model is confident
-        if len(cits) == 1:
-            selected_score = pairwise_scores[0][0]
-            pub = pubs[0]
-            
-            # Check if SELECT model returned False OR low confidence - use NER similarity
-            if selected_score['label'] is False or selected_score['score'] < self.select_threshold:
-                ner_score = self.compute_ner_similarity(citation, cits[0])
-                
-                # Apply NER threshold
-                if ner_score < self.ner_threshold:
-                    result = {}
+                # Prescreen input to ensure it's likely a citation
+                if not self.prescreening_pipeline(citation)[0]["label"]:
+                    result = {"error": "This text is not a citation. Please introduce a valid citation."}
                     if self.enable_caching:
                         self._citation_cache[cache_key] = result.copy()
                         self._manage_cache_size()
                     return result
+
+                ner_entities = self.process_ner_entities(citation)
                 
-                # Use NER score
-                final_score = ner_score
-                score_data = {"score": final_score}
-            else:
-                # SELECT model confident and True
-                final_score = selected_score['score']
-                score_data = selected_score
+            except Exception as e:
+                if self._is_cuda_error(e) and not self._switched_to_cpu:
+                    self._switch_to_cpu()
+                    # Retry with CPU
+                    if not self.prescreening_pipeline(citation)[0]["label"]:
+                        result = {"error": "This text is not a citation. Please introduce a valid citation."}
+                        if self.enable_caching:
+                            self._citation_cache[cache_key] = result.copy()
+                            self._manage_cache_size()
+                        return result
+                    ner_entities = self.process_ner_entities(citation)
+                else:
+                    raise
+                
+            pubs = self.search_api(ner_entities, api=api_target, target_count=10)
+
+            if not pubs:
+                result = {}
+                if self.enable_caching:
+                    self._citation_cache[cache_key] = result.copy()
+                    self._manage_cache_size()
+                return result
+
+            # Format candidate citations and classify best match
+            cits = [self.generate_apa_citation(pub, api=api_target) for pub in pubs]
             
-            pub_id = self.extract_id(pub, api_target)
-            pub_doi = self.extract_doi(pub, api_target)
-            url = self.get_uri(pub_id, pub_doi, api_target)
-            result = self._format_result(cits[0], score_data, pub_id, pub_doi, url, pub, output, api_target)
             
+            try:
+                pairwise_scores = [self.select_pipeline(f"{citation} [SEP] {cit}") for cit in cits]
+            except Exception as e:
+                if self._is_cuda_error(e) and not self._switched_to_cpu:
+                    self._switch_to_cpu()
+                    # Retry with CPU
+                    pairwise_scores = [self.select_pipeline(f"{citation} [SEP] {cit}") for cit in cits]
+                else:
+                    raise
+
+            # If only one candidate, check if SELECT model is confident
+            if len(cits) == 1:
+                selected_score = pairwise_scores[0][0]
+                pub = pubs[0]
+                
+                # Check if SELECT model returned False OR low confidence - use NER similarity
+                if selected_score['label'] is False or selected_score['score'] < self.select_threshold:
+                    ner_score = self.compute_ner_similarity(citation, cits[0])
+                    
+                    # Apply NER threshold
+                    if ner_score < self.ner_threshold:
+                        result = {}
+                        if self.enable_caching:
+                            self._citation_cache[cache_key] = result.copy()
+                            self._manage_cache_size()
+                        return result
+                    
+                    # Use NER score
+                    final_score = ner_score
+                    score_data = {"score": final_score}
+                else:
+                    # SELECT model confident and True
+                    final_score = selected_score['score']
+                    score_data = selected_score
+                
+                pub_id = self.extract_id(pub, api_target)
+                pub_doi = self.extract_doi(pub, api_target)
+                url = self.get_uri(pub_id, pub_doi, api_target)
+                result = self._format_result(cits[0], score_data, pub_id, pub_doi, url, pub, output, api_target)
+                
+                if self.enable_caching:
+                    self._citation_cache[cache_key] = result.copy()
+                    self._manage_cache_size()
+                return result
+
+            # Choose the most likely correct match using classification scores
+            reranked_pub, best_score = self.get_highest_true_position(
+                pairwise_scores, pubs, citation, api_target
+            )
+            if reranked_pub:
+                pub_id = self.extract_id(reranked_pub, api_target)
+                pub_doi = self.extract_doi(reranked_pub, api_target)
+                url = self.get_uri(pub_id, pub_doi, api_target)
+                formatted_cit = self.generate_apa_citation(reranked_pub, api=api_target)
+                result = self._format_result(formatted_cit, {"score": best_score}, pub_id, pub_doi, url, reranked_pub, output, api_target)
+                
+                if self.enable_caching:
+                    self._citation_cache[cache_key] = result.copy()
+                    self._manage_cache_size()
+                return result
+
+            result = {}
             if self.enable_caching:
                 self._citation_cache[cache_key] = result.copy()
                 self._manage_cache_size()
-            return result
-
-        # Choose the most likely correct match using classification scores
-        reranked_pub, best_score = self.get_highest_true_position(
-            pairwise_scores, pubs, citation, api_target
-        )
-        if reranked_pub:
-            pub_id = self.extract_id(reranked_pub, api_target)
-            pub_doi = self.extract_doi(reranked_pub, api_target)
-            url = self.get_uri(pub_id, pub_doi, api_target)
-            formatted_cit = self.generate_apa_citation(reranked_pub, api=api_target)
-            result = self._format_result(formatted_cit, {"score": best_score}, pub_id, pub_doi, url, reranked_pub, output, api_target)
             
-            if self.enable_caching:
-                self._citation_cache[cache_key] = result.copy()
-                self._manage_cache_size()
             return result
-
-        result = {}
-        if self.enable_caching:
-            self._citation_cache[cache_key] = result.copy()
-            self._manage_cache_size()
-        
-        return result
+            
+        except Exception as e:
+            if self._is_cuda_error(e):
+                print(f"CUDA error in link_citation: {e}")
+                if not self._switched_to_cpu:
+                    try:
+                        self._switch_to_cpu()
+                        # Retry the entire operation with CPU
+                        return self.link_citation(citation, output, api_target)
+                    except Exception as retry_error:
+                        result = {"error": f"Failed even after switching to CPU: {retry_error}"}
+                        if self.enable_caching:
+                            cache_key = self._generate_cache_key(citation, api_target, output)
+                            self._citation_cache[cache_key] = result.copy()
+                            self._manage_cache_size()
+                        return result
+            raise
 
     def _format_result(
         self, citation: str, score_data: dict, pub_id: Optional[str], doi: Optional[str],

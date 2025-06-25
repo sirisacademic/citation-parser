@@ -11,6 +11,8 @@ This document provides an overview of the evaluation results for the References 
 
 ## Performance Summary
 
+Thresholds: 0.80 pairwise model / 0.70 entity-based similarity
+
 | API | Accuracy | Total | Correct | Matches | No Results | Incorrect | Wrong Links | Missing | False Positives |
 |-----|----------|-------|---------|---------|------------|-----------|-------------|---------|-----------------|
 | **OpenAlex** | 67.5% | 200 | 135 | 103 | 32 | 65 | 7 | 56 | 2 |
@@ -19,6 +21,11 @@ This document provides an overview of the evaluation results for the References 
 | **CrossRef** | 63.5% | 200 | 127 | 0 | 127 | 73 | 0 | 0 | 12 |
 | **HAL** | 98.5% | 200 | 197 | 0 | 197 | 3 | 0 | 0 | 3 |
 | **Ensemble** | 62.5% | 200 | 125 | 86 | 39 | 75 | 6 | 68 | 1 |
+
+**See the detailed results for different thresholds in the following folders:
+
+- [Thresholds: 0.80 pairwise model / 0.70 entity-based similarity](evaluation_results-thresholds-75_65)**
+- [Thresholds: 0.75 pairwise model / 0.65 entity-based similarity](evaluation_results-thresholds-80_70)**
 
 ## Key Findings
 

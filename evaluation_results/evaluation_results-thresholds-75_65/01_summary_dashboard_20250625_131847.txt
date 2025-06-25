@@ -1,0 +1,44 @@
+========================================================================================================================
+CITATION LINKING EVALUATION - SUMMARY DASHBOARD
+========================================================================================================================
+Evaluation Date: 2025-06-25 13:18:47
+Total Citations Evaluated: 200
+APIs Tested: openalex, openaire, pubmed, crossref, hal
+Evaluation Mode: Strict
+Features: Metrics (Match, No_Result, Missing, Spurious)
+
+ACCURACY METRICS:
+========================================================================================================================
+API          Accuracy  Total  T_Corr  C_Match  C_NoRes  T_Incor  I_Match  I_Miss  I_Spur 
+------------------------------------------------------------------------------------------------------------------------
+Openalex     0.670     200    134     103      31       66       7        56      3      
+Openaire     0.650     200    130     94       36       70       9        58      3      
+Pubmed       0.750     200    150     29       121      50       2        34      14     
+Crossref     0.635     200    127     0        127      73       0        0       13     
+Hal          0.985     200    197     0        197      3        0        0       3      
+Ensemble     0.640     200    128     89       39       72       7        64      1      
+========================================================================================================================
+
+COLUMN DEFINITIONS:
+--------------------------------------------------
+BASIC METRICS:
+  • API        : API name (OpenAlex, OpenAIRE, PubMed, CrossRef, HAL, Ensemble)
+  • Accuracy   : Percentage of correct predictions
+  • Total      : Total citations processed (excluding errors)
+
+CORRECT RESULTS:
+  • T_Corr     : Total Correct - All correctly classified citations
+  • C_Match    : Correct Matches - Citations correctly linked to expected results
+  • C_NoRes    : Correct No Result - Citations that correctly returned no match
+
+INCORRECT RESULTS:
+  • T_Incor    : Total Incorrect - All incorrectly classified citations
+  • I_Match    : Incorrect Matches - Wrong links when correct link expected
+  • I_Miss     : Incorrect Missing - No result when correct link expected
+  • I_Spur     : Incorrect Spurious - Unexpected result when no link expected
+
+INTERPRETATION:
+  • High I_Miss indicates the API is missing papers that should be found
+  • High I_Spur indicates the API is returning false positives
+  • High I_Match indicates the API finds papers but links to wrong ones
+  • Perfect score: T_Corr = Total, T_Incor = 0
