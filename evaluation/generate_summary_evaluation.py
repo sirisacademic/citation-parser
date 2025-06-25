@@ -9,6 +9,15 @@ from datetime import datetime
 from pathlib import Path
 import sys
 
+# Determine project root
+current_file = Path(__file__).absolute()
+if current_file.parent.name == "evaluation":
+    # Running from evaluation/ directory or as evaluation/script.py
+    project_root = current_file.parent.parent
+else:
+    # Running from project root
+    project_root = current_file.parent
+
 def calculate_metrics(results_data, evaluation_mode="strict"):
     """
     Calculate metrics from evaluation results data
@@ -31,11 +40,14 @@ def calculate_metrics(results_data, evaluation_mode="strict"):
             gold_standard = result['gold_standard']
             
             # Get expected value for this approach
-            if approach == 'ensemble':
-                expected_value = gold_standard.get('doi')  # Ensemble expects DOI
-                api_result = result.get('ensemble', {})
+            if approach == 'ensemble' or approach == 'crossref':
+                expected_value = gold_standard.get('doi')  # Ensemble and CrossRef expect DOI
+                if approach == 'ensemble':
+                    api_result = result.get('ensemble', {})
+                else:
+                    api_result = result.get('api_results', {}).get(approach, {})
             else:
-                expected_value = gold_standard.get(approach)  # API expects its specific ID
+                expected_value = gold_standard.get(approach)  # Other APIs expect their specific ID
                 api_result = result.get('api_results', {}).get(approach, {})
             
             status = api_result.get('status', 'ERROR')
@@ -185,7 +197,7 @@ def main():
     
     results_file = sys.argv[1]
     evaluation_mode = sys.argv[2] if len(sys.argv) > 2 else "strict"
-    output_dir = Path(sys.argv[3]) if len(sys.argv) > 3 else Path("../evaluation_results")
+    output_dir = Path(sys.argv[3]) if len(sys.argv) > 3 else Path(f"{project_root}/evaluation_results")
     
     # Load results
     try:

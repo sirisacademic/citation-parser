@@ -35,7 +35,7 @@ from pathlib import Path
 import traceback
 from datetime import datetime
 
-# FIXED: Correctly determine project root
+# Determine project root
 current_file = Path(__file__).absolute()
 if current_file.parent.name == "evaluation":
     # Running from evaluation/ directory or as evaluation/script.py

@@ -244,11 +244,14 @@ class CitationEvaluator:
                 gold_standard = result['gold_standard']
                 
                 # Get expected value for this approach
-                if approach == 'ensemble':
-                    expected_value = gold_standard.get('doi')  # Ensemble expects DOI
-                    api_result = result.get('ensemble', {})
+                if approach == 'ensemble' or approach == 'crossref':
+                    expected_value = gold_standard.get('doi')  # Ensemble and CrossRef expect DOI
+                    if approach == 'ensemble':
+                        api_result = result.get('ensemble', {})
+                    else:
+                        api_result = result.get('api_results', {}).get(approach, {})
                 else:
-                    expected_value = gold_standard.get(approach)  # API expects its specific ID
+                    expected_value = gold_standard.get(approach)  # Other APIs expect their specific ID
                     api_result = result.get('api_results', {}).get(approach, {})
                 
                 status = api_result.get('status', 'ERROR')
