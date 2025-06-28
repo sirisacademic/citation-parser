@@ -4,12 +4,80 @@ from typing import Dict, List, Optional
 
 class EntityValidator:
     """Utility class for cleaning and validating NER entities"""
-    
+
+    @staticmethod
+    def reconstruct_page_range(first_page: str, last_page: str) -> tuple[str, str]:
+        """
+        Reconstruct abbreviated page ranges by expanding the last page.
+        
+        Examples:
+            4307, 12 → 4307, 4312
+            4307, 92 → 4307, 4392
+            4307, 123 → 4307, 4123 (invalid - rejected)
+            1999, 03 → 1999, 1903 (invalid - rejected)
+        
+        Args:
+            first_page: The starting page number as string
+            last_page: The ending page (possibly abbreviated) as string
+            
+        Returns:
+            Tuple of (first_page, expanded_last_page) or original values if no expansion needed/valid
+        """
+        if not first_page or not last_page:
+            return first_page, last_page
+        
+        # Clean inputs - extract numeric parts only
+        first_num = re.search(r'\d+', first_page)
+        last_num = re.search(r'\d+', last_page)
+        
+        if not first_num or not last_num:
+            return first_page, last_page
+        
+        first_digits = first_num.group()
+        last_digits = last_num.group()
+        
+        # Check if expansion is potentially needed
+        if len(last_digits) >= len(first_digits):
+            # Last page is same length or longer - probably not abbreviated
+            return first_page, last_page
+        
+        # Check if last page is already larger than first (not abbreviated)
+        try:
+            if int(last_digits) > int(first_digits):
+                # Already valid without expansion
+                return first_page, last_page
+        except ValueError:
+            return first_page, last_page
+        
+        # Attempt expansion by replacing last N digits
+        abbreviation_length = len(last_digits)
+        
+        # Safety check: abbreviation can't be as long as the full first page
+        if abbreviation_length >= len(first_digits):
+            return first_page, last_page
+        
+        # Replace the last N digits of first_page with last_digits
+        prefix_length = len(first_digits) - abbreviation_length
+        prefix = first_digits[:prefix_length]
+        expanded_last = prefix + last_digits
+        
+        # Validate that expanded last page > first page
+        try:
+            if int(expanded_last) > int(first_digits):
+                # Valid expansion
+                return first_page, expanded_last
+            else:
+                # Invalid expansion (would go backwards)
+                return first_page, last_page
+        except ValueError:
+            return first_page, last_page
+
     @staticmethod
     def validate_and_clean_entities(ner_entities: Dict[str, List[str]]) -> Dict[str, List[str]]:
         """
         Validate and select the best entity from each NER list.
         First applies general tokenizer cleanup, then field-specific validation.
+        Enhanced with page range reconstruction.
         """
         # Step 1: Clean tokenizer artifacts from all fields
         preprocessed_entities = EntityValidator._clean_tokenizer_artifacts(ner_entities)
@@ -52,15 +120,28 @@ class EntityValidator:
             if best_issue:
                 cleaned_entities['ISSUE'] = [best_issue]
 
+        # Handle page range reconstruction
+        page_first = None
+        page_last = None
+        
         if 'PAGE_FIRST' in preprocessed_entities and preprocessed_entities['PAGE_FIRST']:
-            best_page_first = EntityValidator._select_best_page(preprocessed_entities['PAGE_FIRST'])
-            if best_page_first:
-                cleaned_entities['PAGE_FIRST'] = [best_page_first]
-
+            page_first = EntityValidator._select_best_page(preprocessed_entities['PAGE_FIRST'])
+        
         if 'PAGE_LAST' in preprocessed_entities and preprocessed_entities['PAGE_LAST']:
-            best_page_last = EntityValidator._select_best_page(preprocessed_entities['PAGE_LAST'])
-            if best_page_last:
-                cleaned_entities['PAGE_LAST'] = [best_page_last]
+            page_last = EntityValidator._select_best_page(preprocessed_entities['PAGE_LAST'])
+        
+        # Apply page range reconstruction if both pages exist
+        if page_first and page_last:
+            reconstructed_first, reconstructed_last = EntityValidator.reconstruct_page_range(page_first, page_last)
+            
+            cleaned_entities['PAGE_FIRST'] = [reconstructed_first]
+            cleaned_entities['PAGE_LAST'] = [reconstructed_last]
+        else:
+            # Add individual pages if only one exists
+            if page_first:
+                cleaned_entities['PAGE_FIRST'] = [page_first]
+            if page_last:
+                cleaned_entities['PAGE_LAST'] = [page_last]
 
         return cleaned_entities
     

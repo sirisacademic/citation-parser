@@ -27,6 +27,7 @@ Examples:
 """
 
 EVALUATE_APIS = ["openalex", "openaire", "pubmed", "crossref", "hal"]
+#EVALUATE_APIS = ["openalex"]
 
 import argparse
 import sys

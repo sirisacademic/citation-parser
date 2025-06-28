@@ -71,6 +71,7 @@ build
 
 # node stuff
 package-lock.json
+test.py
 test
 test/*
 

@@ -21,8 +21,8 @@ from transformers import (
 from datasets import Dataset
 from transformers.pipelines.pt_utils import KeyDataset
 
-THRESHOLD_PARWISE_MODEL = 0.75 # Higher threshold for SELECT model
-THRESHOLD_NER_SIMILARITY = 0.65 # Lower threshold for NER similarity
+THRESHOLD_PARWISE_MODEL = 0.90 # Higher threshold for SELECT model
+THRESHOLD_NER_SIMILARITY = 0.60 # Lower threshold for NER similarity
 
 #THRESHOLD_PARWISE_MODEL = 0.80 # Higher threshold for SELECT model
 #THRESHOLD_NER_SIMILARITY = 0.70 # Lower threshold for NER similarity
@@ -77,6 +77,7 @@ class ReferencesTractor:
         cache_size_limit: int = 1000,
         select_threshold: float = THRESHOLD_PARWISE_MODEL,
         ner_threshold: float = THRESHOLD_NER_SIMILARITY,
+        debug: bool = False,
     ):
         self._switched_to_cpu = False  # Track if we've switched to CPU due to GPU errors
 
@@ -97,13 +98,17 @@ class ReferencesTractor:
         self.select_pipeline = self._init_pipeline("text-classification", select_model_path, device)
         self.prescreening_pipeline = self._init_pipeline("text-classification", prescreening_model_path, device)
         self.span_pipeline = self._init_pipeline("ner", span_model_path, device, agg_strategy="simple")
-        self.searcher = search_api.SearchAPI()
+        self.searcher = search_api.SearchAPI(debug=debug)
         
         # Initialize caching system
         self.enable_caching = enable_caching
         self.cache_size_limit = cache_size_limit
         self._citation_cache = {}
         self._cache_stats = {'hits': 0, 'misses': 0, 'size': 0}
+
+        self.debug = debug
+        if self.debug:
+            print("DEBUGGING set to True")
 
         # Initialize thresholds
         self.select_threshold = select_threshold
@@ -263,18 +268,78 @@ class ReferencesTractor:
         # PubMed now uses parsed dict structure like other APIs - no special handling needed
         formatter = citation_formatter.CitationFormatterFactory.get_formatter(api)
         return formatter.generate_apa_citation(data)
+    
+    def extract_fields_from_formatted_citation(self, formatted_citation: str, api: str) -> Dict[str, str]:
+        """
+        Extract fields from APA-formatted citation using pattern matching
+        This complements NER extraction with more reliable pattern-based extraction
+        """
+        extracted = {}
+        
+        # Common APA citation patterns
+        patterns = {
+            'volume_issue_pages': r'(\d+)\s*\((\d+)\)\s*(\d+)-(\d+)',  # 188 (1) 33-42
+            'volume_pages': r'(\d+)\s+(\d+)-(\d+)',  # 188 33-42
+            'volume_issue': r'(\d+)\s*\((\d+)\)',  # 188 (1)
+            'volume_only': r',\s*(\d+)\s*(?:\(|$)',  # Journal, 188
+            'year': r'\((\d{4})\)',  # (2002)
+            'doi': r'DOI:\s*(10\.\d+/[^\s]+)',  # DOI: 10.1034/...
+            'pages_only': r'(\d+)-(\d+)\.',  # 33-42.
+            'electronic_pages': r'(e\d+)',  # e123456
+        }
+        
+        # Extract volume, issue, pages (try most specific first)
+        volume_match = re.search(patterns['volume_issue_pages'], formatted_citation)
+        if volume_match:
+            extracted['volume'] = volume_match.group(1)
+            extracted['issue'] = volume_match.group(2) 
+            extracted['page_first'] = volume_match.group(3)
+            extracted['page_last'] = volume_match.group(4)
+        else:
+            # Try volume with issue but no pages
+            volume_issue_match = re.search(patterns['volume_issue'], formatted_citation)
+            if volume_issue_match:
+                extracted['volume'] = volume_issue_match.group(1)
+                extracted['issue'] = volume_issue_match.group(2)
+            else:
+                # Try volume only
+                volume_only_match = re.search(patterns['volume_only'], formatted_citation)
+                if volume_only_match:
+                    extracted['volume'] = volume_only_match.group(1)
+            
+            # Try to find pages separately
+            pages_match = re.search(patterns['pages_only'], formatted_citation)
+            if pages_match:
+                extracted['page_first'] = pages_match.group(1)
+                extracted['page_last'] = pages_match.group(2)
+            else:
+                # Check for electronic article IDs
+                electronic_match = re.search(patterns['electronic_pages'], formatted_citation)
+                if electronic_match:
+                    extracted['page_first'] = electronic_match.group(1)
+        
+        # Extract year
+        year_match = re.search(patterns['year'], formatted_citation)
+        if year_match:
+            extracted['publication_year'] = year_match.group(1)
+        
+        # Extract DOI
+        doi_match = re.search(patterns['doi'], formatted_citation)
+        if doi_match:
+            extracted['doi'] = doi_match.group(1)
+        
+        return extracted
 
     def compute_ner_similarity(self, original_citation: str, candidate_citation: str) -> float:
         """
-        Compute similarity between two citations based on NER-extracted fields.
+        Enhanced similarity computation using both NER and pattern extraction.
         Returns a score between 0.0 and 1.0, where 1.0 is perfect match.
         
-        Args:
-            original_citation: The input citation string
-            candidate_citation: The formatted candidate citation to compare
-            
-        Returns:
-            float: Similarity score between 0.0 and 1.0
+        Improvements:
+        - Uses pattern extraction to complement NER for formatted citations
+        - Enhanced journal abbreviation matching
+        - Better author surname comparison
+        - More robust field extraction
         """
         import re
         from difflib import SequenceMatcher
@@ -283,12 +348,33 @@ class ReferencesTractor:
         original_entities = self.process_ner_entities(original_citation)
         candidate_entities = self.process_ner_entities(candidate_citation)
         
+        # Enhance candidate entities with pattern extraction from formatted citation
+        pattern_fields = self.extract_fields_from_formatted_citation(candidate_citation, "openalex")
+        for field, value in pattern_fields.items():
+            field_upper = field.upper()
+            if field_upper not in candidate_entities or not candidate_entities[field_upper]:
+                candidate_entities[field_upper] = [value]
+
+        if self.debug:
+            print("\n--------------------------------------------")
+            print(f"Citation: {original_citation}")
+            print(f"    -> NER entities: {original_entities}")
+            print()
+            print(f"Candidate: {candidate_citation}")
+            print(f"    -> NER entities: {candidate_entities}")
+            print(f"    -> Pattern extracted: {pattern_fields}")
+            print("--------------------------------------------")
+
         total_score = 0.0
         field_weights = {
-            'TITLE': 0.6,
-            'AUTHORS': 0.3,
-            'PUBLICATION_YEAR': 0.2,
-            'DOI': 0.05
+            'DOI': 1,
+            'TITLE': 0.7,
+            'AUTHORS': 0.5,
+            'JOURNAL': 0.2,
+            'VOLUME': 0.2,
+            'ISSUE': 0.2,
+            'PAGE_FIRST': 0.2,
+            'PUBLICATION_YEAR': 0.2
         }
         
         def normalize_text(text):
@@ -311,11 +397,37 @@ class ReferencesTractor:
             return SequenceMatcher(None, norm1, norm2).ratio()
         
         def author_similarity(authors1, authors2):
-            """Compute author similarity using fuzzy matching with word overlap"""
+            """Enhanced author similarity using surname extraction with word overlap fallback"""
             if not authors1 or not authors2:
                 return 0.0
             
-            # Simple approach: combine fuzzy similarity with word overlap
+            # Try surname extraction approach first
+            try:
+                # Extract surnames using the improved logic
+                if hasattr(self, 'field_mapper'):
+                    surname1 = self.field_mapper.extract_author_surname(authors1)
+                    surname2 = self.field_mapper.extract_author_surname(authors2)
+                    
+                    if surname1 and surname2:
+                        # Normalize surnames for comparison
+                        norm_surname1 = normalize_text(surname1)
+                        norm_surname2 = normalize_text(surname2)
+                        
+                        if norm_surname1 and norm_surname2:
+                            # Direct surname comparison
+                            surname_similarity = SequenceMatcher(None, norm_surname1, norm_surname2).ratio()
+                            
+                            # If surnames are very similar, return high score
+                            if surname_similarity > 0.8:
+                                return surname_similarity
+                            
+                            # Check if one surname is contained in the other (for different formats)
+                            if norm_surname1 in norm_surname2 or norm_surname2 in norm_surname1:
+                                return 0.9
+            except:
+                pass  # Fall back to word overlap method
+            
+            # Fallback to original word overlap method
             fuzzy_score = fuzzy_similarity(authors1, authors2)
             
             # Extract meaningful words (length > 2, not common words)
@@ -339,7 +451,81 @@ class ReferencesTractor:
             word_overlap = intersection / union if union > 0 else 0.0
             
             # Combine fuzzy similarity with word overlap
-            return max(fuzzy_score, word_overlap * 0.8)  # Give word overlap slightly less weight
+            return max(fuzzy_score, word_overlap * 0.8)
+        
+        def journal_similarity(journal1, journal2):
+            """Enhanced journal name matching with standard abbreviation patterns"""
+            if not journal1 or not journal2:
+                return 0.0
+            
+            def normalize_journal(journal):
+                if not journal:
+                    return ""
+                normalized = journal.lower().strip()
+                # Remove common prefixes/suffixes but keep review/reviews for abbreviation matching
+                normalized = re.sub(r'\b(journal|proceedings|international|transactions)\b', '', normalized)
+                normalized = re.sub(r'\b(of|the|and|for|in)\b', '', normalized)
+                # Remove punctuation and normalize whitespace
+                normalized = re.sub(r'[^\w\s]', ' ', normalized)
+                normalized = re.sub(r'\s+', ' ', normalized).strip()
+                return normalized
+            
+            norm1 = normalize_journal(journal1)
+            norm2 = normalize_journal(journal2)
+            
+            if not norm1 or not norm2:
+                return 0.0
+            
+            # Exact match after normalization
+            if norm1 == norm2:
+                return 1.0
+            
+            def check_abbreviation_match(abbrev, full):
+                """Check if abbrev could be a standard abbreviation of full"""
+                abbrev_words = abbrev.split()
+                full_words = full.split()
+                
+                if len(abbrev_words) != len(full_words):
+                    return False
+                
+                # Check if each abbreviated word matches the start of the full word
+                for abbrev_word, full_word in zip(abbrev_words, full_words):
+                    # Remove trailing dots from abbreviation
+                    clean_abbrev = abbrev_word.rstrip('.')
+                    # Standard abbreviation: first few letters match
+                    if not full_word.startswith(clean_abbrev.lower()):
+                        return False
+                
+                return True
+            
+            # Test both directions (one could be abbreviation of the other)
+            if check_abbreviation_match(norm1, norm2) or check_abbreviation_match(norm2, norm1):
+                return 0.95
+            
+            # Check for partial word matches (common in journal abbreviations)
+            words1 = set(norm1.split())
+            words2 = set(norm2.split())
+            
+            if words1 and words2:
+                # Calculate word overlap with abbreviation consideration
+                matches = 0
+                for w1 in words1:
+                    for w2 in words2:
+                        # Exact match
+                        if w1 == w2:
+                            matches += 1
+                            break
+                        # Abbreviation match (one starts with the other)
+                        elif w1.startswith(w2) or w2.startswith(w1):
+                            matches += 0.8
+                            break
+                
+                overlap_score = matches / max(len(words1), len(words2))
+                if overlap_score > 0.6:
+                    return overlap_score
+            
+            # Fuzzy matching fallback
+            return SequenceMatcher(None, norm1, norm2).ratio() * 0.7
         
         def extract_any_year(text):
             """Extract any 4-digit year from text"""
@@ -387,6 +573,84 @@ class ReferencesTractor:
             
             return 1.0 if norm_doi1 == norm_doi2 else 0.0
         
+        def volume_similarity(vol1, vol2):
+            """Volume exact matching with numeric extraction"""
+            if not vol1 or not vol2:
+                return 0.0
+            
+            # Extract numeric volume
+            def extract_volume_number(vol_text):
+                if not vol_text:
+                    return None
+                # Extract first number sequence
+                vol_match = re.search(r'\d+', str(vol_text))
+                return vol_match.group() if vol_match else None
+            
+            num1 = extract_volume_number(vol1)
+            num2 = extract_volume_number(vol2)
+            
+            if num1 and num2:
+                return 1.0 if num1 == num2 else 0.0
+            
+            return 0.0
+        
+        def issue_similarity(issue1, issue2):
+            """Issue exact matching with numeric extraction"""
+            if not issue1 or not issue2:
+                return 0.0
+            
+            # Extract numeric issue
+            def extract_issue_number(issue_text):
+                if not issue_text:
+                    return None
+                # Extract first number sequence
+                issue_match = re.search(r'\d+', str(issue_text))
+                return issue_match.group() if issue_match else None
+            
+            num1 = extract_issue_number(issue1)
+            num2 = extract_issue_number(issue2)
+            
+            if num1 and num2:
+                return 1.0 if num1 == num2 else 0.0
+            
+            return 0.0
+        
+        def page_similarity(page1, page2):
+            """Page number matching with electronic article ID support"""
+            if not page1 or not page2:
+                return 0.0
+            
+            def extract_page_info(page_text):
+                if not page_text:
+                    return None
+                
+                page_text = str(page_text).strip()
+                
+                # Check for electronic article identifiers (e.g., e123456, e1234)
+                e_article_match = re.search(r'\be\d+\b', page_text, re.IGNORECASE)
+                if e_article_match:
+                    return ('electronic', e_article_match.group().lower())
+                
+                # Extract regular page numbers
+                page_match = re.search(r'\d+', page_text)
+                if page_match:
+                    return ('numeric', page_match.group())
+                
+                return None
+            
+            page_info1 = extract_page_info(page1)
+            page_info2 = extract_page_info(page2)
+            
+            if page_info1 and page_info2:
+                type1, value1 = page_info1
+                type2, value2 = page_info2
+                
+                # Both must be same type and same value
+                if type1 == type2 and value1 == value2:
+                    return 1.0
+            
+            return 0.0
+        
         # Calculate field-specific similarities with fallback extraction
         field_scores = {}
         
@@ -408,6 +672,7 @@ class ReferencesTractor:
             if not cand_text and field == 'PUBLICATION_YEAR':
                 cand_text = str(extract_any_year(cand_combined) or "")
             
+            # Apply field-specific similarity functions
             if field == 'TITLE':
                 field_scores[field] = fuzzy_similarity(orig_text, cand_text)
             elif field == 'AUTHORS':
@@ -416,57 +681,129 @@ class ReferencesTractor:
                 field_scores[field] = year_similarity(orig_text, cand_text)
             elif field == 'DOI':
                 field_scores[field] = doi_similarity(orig_text, cand_text)
+            elif field == 'JOURNAL':
+                field_scores[field] = journal_similarity(orig_text, cand_text)
+            elif field == 'VOLUME':
+                field_scores[field] = volume_similarity(orig_text, cand_text)
+            elif field == 'ISSUE':
+                field_scores[field] = issue_similarity(orig_text, cand_text)
+            elif field == 'PAGE_FIRST':
+                field_scores[field] = page_similarity(orig_text, cand_text)
+            else:
+                field_scores[field] = 0.0
             
             # Add weighted score
             total_score += field_scores[field] * weight
+            
+        if self.debug:
+            print(f"=> Field scores: {field_scores}")
         
         return min(total_score, 1.0)  # Ensure score doesn't exceed 1.0
-
+    
     def get_highest_true_position(
         self, outputs: List[List[Dict[str, Any]]], inputs: List[Any], 
         original_citation: str = None, api_target: str = None
     ) -> Tuple[Optional[Any], Optional[float]]:
-
+        
+        if self.debug:
+            print(f"\n=== DEBUG: get_highest_true_position for {api_target} ===")
+            print(f"Original citation: {original_citation[:100]}...")
+            print(f"Number of candidates: {len(inputs)}")
+            print(f"SELECT threshold: {self.select_threshold}, NER threshold: {self.ner_threshold}")
+        
         # Get True labels with confidence threshold
         confident_true_scores = []
         uncertain_true_scores = []
         
+        if self.debug:
+            print(f"\n--- Analyzing SELECT model outputs ---")
+        
         for i, result in enumerate(outputs):
-            if result[0]['label'] is True:
-                score = result[0]['score']
+            label = result[0]['label']
+            score = result[0]['score']
+            
+            if self.debug:
+                print(f"\nCandidate {i}: Label={label}, Score={score:.3f}")
+            
+            if label is True:
                 if score >= self.select_threshold:
                     confident_true_scores.append((i, score))
+                    if self.debug:
+                        print(f"  → Added to CONFIDENT True (score >= {self.select_threshold})")
                 else:
                     uncertain_true_scores.append((i, score))
+                    if self.debug:
+                        print(f"  → Added to UNCERTAIN True (score < {self.select_threshold})")
+        
+        if self.debug:
+            print(f"\nSUMMARY: {len(confident_true_scores)} confident, {len(uncertain_true_scores)} uncertain True labels")
         
         # First try confident True labels
         if confident_true_scores:
-            best_index, best_score = max(confident_true_scores, key=lambda x: x[1])  # Fixed: unpack tuple
+            # NEW: Check for ties between confident candidates
+            if len(confident_true_scores) > 1:
+                best_index, best_score = self._resolve_confident_candidates_tie(
+                    confident_true_scores, inputs, original_citation, api_target
+                )
+            else:
+                # Single confident candidate - use it directly
+                best_index, best_score = confident_true_scores[0]
+            
             self._last_scoring_method = 'select_model'
+            
+            if self.debug:
+                print(f"\n✓ DECISION: Using confident SELECT model")
+                print(f"  Selected candidate {best_index} with score {best_score:.3f}")
+                try:
+                    formatted = self.generate_apa_citation(inputs[best_index], api=api_target)
+                    print(f"  Selected citation: {formatted[:150]}...")
+                except:
+                    print(f"  (Could not format selected citation)")
+            
             return inputs[best_index], best_score
         
         # If only uncertain True labels, validate with NER
         if uncertain_true_scores and original_citation and api_target:
+            if self.debug:
+                print(f"\n--- Validating uncertain True labels with NER similarity ---")
+            
             validated_candidates = []
             for i, select_score in uncertain_true_scores:
                 try:
                     formatted_citation = self.generate_apa_citation(inputs[i], api=api_target)
                     ner_score = self.compute_ner_similarity(original_citation, formatted_citation)
                     
-                    if ner_score >= self.ner_threshold:  # NER validation threshold
-                        validated_candidates.append((i, ner_score))  # Use NER score
-
+                    if ner_score >= self.ner_threshold:
+                        validated_candidates.append((i, ner_score))
+                        if self.debug:
+                            print(f"  ✓ PASSED NER validation (>= {self.ner_threshold})")
+                    else:
+                        if self.debug:
+                            print(f"  ✗ FAILED NER validation (< {self.ner_threshold})")
+                            
                 except Exception as e:
-                    print(f"Error computing NER for candidate {i}: {e}")
+                    if self.debug:
+                        print(f"\nCandidate {i}: ERROR computing NER - {e}")
             
             if validated_candidates:
-                best_index, best_score = max(validated_candidates, key=lambda x: x[1])  # Fixed: unpack tuple
+                best_index, best_score = max(validated_candidates, key=lambda x: x[1])
                 self._last_scoring_method = 'ner_similarity'
+                
+                if self.debug:
+                    print(f"\n✓ DECISION: Using NER-validated candidate")
+                    print(f"  Selected candidate {best_index} with NER score {best_score:.3f}")
+                
                 return inputs[best_index], best_score
+            elif self.debug:
+                print(f"\n✗ No candidates passed NER validation")
         
         # Fallback to NER-only similarity (no True labels or validation failed)
+        if self.debug:
+            print(f"\n--- Fallback: Computing NER similarity for all candidates ---")
         
         if not original_citation or not api_target:
+            if self.debug:
+                print(f"✗ Cannot compute NER similarity - missing parameters")
             return None, None
         
         ner_scores = []
@@ -475,21 +812,117 @@ class ReferencesTractor:
                 formatted_citation = self.generate_apa_citation(pub, api=api_target)
                 ner_score = self.compute_ner_similarity(original_citation, formatted_citation)
                 ner_scores.append((i, ner_score))
+                    
             except Exception as e:
-                print(f"Error computing NER similarity for candidate {i}: {e}")
+                if self.debug:
+                    print(f"\nCandidate {i}: ERROR computing NER - {e}")
                 ner_scores.append((i, 0.0))
         
         if ner_scores:
-            best_index, best_score = max(ner_scores, key=lambda x: x[1])  # Fixed: unpack tuple
+            best_index, best_score = max(ner_scores, key=lambda x: x[1])
+            
+            if self.debug:
+                print(f"\nBest NER candidate: {best_index} with score {best_score:.3f}")
             
             # Apply NER threshold even in fallback
             if best_score < self.ner_threshold:
+                if self.debug:
+                    print(f"✗ DECISION: Best NER score {best_score:.3f} below threshold {self.ner_threshold}, rejecting all")
                 return None, None
             
             self._last_scoring_method = 'ner_similarity'
+            
+            if self.debug:
+                print(f"✓ DECISION: Using best NER candidate {best_index} with score {best_score:.3f}")
+            
             return inputs[best_index], best_score
         
+        if self.debug:
+            print(f"✗ DECISION: No valid candidates found")
+        
         return None, None
+
+    def _resolve_confident_candidates_tie(
+        self, confident_candidates: List[Tuple[int, float]], inputs: List[Any], 
+        original_citation: str, api_target: str
+    ) -> Tuple[int, float]:
+        """
+        Resolve ties between confident True candidates using NER similarity as tiebreaker.
+        
+        Args:
+            confident_candidates: List of (index, score) tuples for confident True candidates
+            inputs: List of publication candidates
+            original_citation: Original citation text
+            api_target: Target API name
+            
+        Returns:
+            Tuple of (best_index, best_score) from the original SELECT scores
+        """
+        if self.debug:
+            print(f"\n--- Resolving tie between {len(confident_candidates)} confident candidates ---")
+        
+        # Set tie threshold (1% difference)
+        tie_threshold = 0.01
+        
+        # Sort candidates by SELECT score (highest first)
+        sorted_candidates = sorted(confident_candidates, key=lambda x: x[1], reverse=True)
+        top_score = sorted_candidates[0][1]
+        
+        # Find all candidates within tie threshold
+        tied_candidates = []
+        for idx, score in sorted_candidates:
+            score_diff = abs(score - top_score)
+            if score_diff <= tie_threshold:
+                tied_candidates.append((idx, score))
+                if self.debug:
+                    print(f"  Candidate {idx}: SELECT score {score:.3f} (diff: {score_diff:.3f}) - IN TIE")
+            else:
+                if self.debug:
+                    print(f"  Candidate {idx}: SELECT score {score:.3f} (diff: {score_diff:.3f}) - CLEAR LOSER")
+        
+        # If only one candidate in the tie group, return it
+        if len(tied_candidates) == 1:
+            if self.debug:
+                print(f"  No actual tie found, using highest scorer")
+            return tied_candidates[0]
+        
+        if self.debug:
+            print(f"  Actual tie detected between {len(tied_candidates)} candidates")
+            print(f"  Using NER similarity as tiebreaker...")
+        
+        # Compute NER similarity for tied candidates only
+        ner_results = []
+        for idx, select_score in tied_candidates:
+            try:
+                formatted_citation = self.generate_apa_citation(inputs[idx], api=api_target)
+                ner_score = self.compute_ner_similarity(original_citation, formatted_citation)
+                ner_results.append((idx, select_score, ner_score))
+                
+                if self.debug:
+                    print(f"    Candidate {idx}: SELECT={select_score:.3f}, NER={ner_score:.3f}")
+                    print(f"      Citation: {formatted_citation[:100]}...")
+                    
+            except Exception as e:
+                if self.debug:
+                    print(f"    Candidate {idx}: ERROR computing NER similarity - {e}")
+                ner_results.append((idx, select_score, 0.0))
+        
+        # Select candidate with highest NER similarity (but return original SELECT score)
+        if ner_results:
+            best_result = max(ner_results, key=lambda x: x[2])  # Sort by NER score
+            best_index, best_select_score, best_ner_score = best_result
+            
+            if self.debug:
+                print(f"  TIE RESOLVED: Candidate {best_index} wins with NER score {best_ner_score:.3f}")
+                print(f"  Returning original SELECT score: {best_select_score:.3f}")
+            
+            # Return the original SELECT score, not the NER score
+            return best_index, best_select_score
+        
+        # Fallback: return highest SELECT score if NER computation failed
+        if self.debug:
+            print(f"  TIE RESOLUTION FAILED: Falling back to highest SELECT score")
+        return sorted_candidates[0]
 
     def search_api(self, ner_entities: Dict[str, List[str]], api: str = "openalex", 
                       target_count: int = 10) -> List[dict]:
@@ -619,6 +1052,13 @@ class ReferencesTractor:
                     raise
                 
             pubs = self.search_api(ner_entities, api=api_target, target_count=10)
+            if self.debug:
+                print(f"\n=== DEBUG: Citation Selection Phase ===")
+                print(f"Found {len(pubs)} candidates from search")
+                for i, pub in enumerate(pubs):
+                    title = pub.get('title', 'No title')[:50]
+                    doi = pub.get('doi', 'No DOI')
+                    print(f"  Candidate {i}: {title}... | DOI: {doi}")
 
             if not pubs:
                 result = {}
@@ -629,10 +1069,18 @@ class ReferencesTractor:
 
             # Format candidate citations and classify best match
             cits = [self.generate_apa_citation(pub, api=api_target) for pub in pubs]
-            
+            if self.debug:
+                print(f"\nFormatted citations:\n")
+                for i, cit in enumerate(cits):
+                    print(f"-  Citation {i}: {cit}\n")
             
             try:
                 pairwise_scores = [self.select_pipeline(f"{citation} [SEP] {cit}") for cit in cits]
+                if self.debug:
+                    print(f"\nPairwise scores:")
+                    for i, score in enumerate(pairwise_scores):
+                        print(f"  Score {i}: {score}")
+                
             except Exception as e:
                 if self._is_cuda_error(e) and not self._switched_to_cpu:
                     self._switch_to_cpu()
@@ -649,6 +1097,8 @@ class ReferencesTractor:
                 # Check if SELECT model returned False OR low confidence - use NER similarity
                 if selected_score['label'] is False or selected_score['score'] < self.select_threshold:
                     ner_score = self.compute_ner_similarity(citation, cits[0])
+                    if self.debug:
+                        print(f"\nNER score: {ner_score}")
                     
                     # Apply NER threshold
                     if ner_score < self.ner_threshold:

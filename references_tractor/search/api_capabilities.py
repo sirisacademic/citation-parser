@@ -84,7 +84,7 @@ class APICapabilities:
         "openalex": {
             "DOI": SearchFieldConfig("doi", "exact", "clean_doi"),
             "TITLE": SearchFieldConfig("title.search", "search", "clean_title"),
-            "AUTHORS": SearchFieldConfig("raw_author_name.search", "search", "extract_author_surname"),
+            "AUTHORS": SearchFieldConfig("raw_author_name.search", "search", "extract_author_surname_boolean"),
             "PUBLICATION_YEAR": SearchFieldConfig("publication_year", "exact"),
             "JOURNAL": SearchFieldConfig("locations.source.id", "exact", "resolve_journal_id"),
             "VOLUME": SearchFieldConfig("biblio.volume", "exact"),
@@ -107,7 +107,7 @@ class APICapabilities:
         "openaire": {
             "DOI": SearchFieldConfig("pid", "exact", "clean_doi"),
             "TITLE": SearchFieldConfig("mainTitle", "search"),
-            "AUTHORS": SearchFieldConfig("authorFullName", "search", "extract_author_surname"),
+            "AUTHORS": SearchFieldConfig("authorFullName", "search", "extract_author_surname_boolean"),
             "PUBLICATION_YEAR": SearchFieldConfig("fromPublicationDate", "range", "year_to_date_range"),
             "TITLE_SEGMENTED": SearchFieldConfig("mainTitle", "search", "segment_title_for_or_search"),
         },
@@ -168,85 +168,151 @@ class APICapabilities:
     # API-specific field combinations ordered by precision (restrictive -> broad)
     FIELD_COMBINATIONS = {
         "openalex": [
+            # Tier 1: DOI (highest precision)
             ["DOI"],
-            # Title combinations (high precision)
+            
+            # Tier 2: Title combinations (high precision)
             ["TITLE", "PUBLICATION_YEAR", "AUTHORS", "JOURNAL"],
             ["TITLE", "PUBLICATION_YEAR", "AUTHORS"],
             ["TITLE", "PUBLICATION_YEAR", "JOURNAL"],
             ["TITLE", "PUBLICATION_YEAR"],
             ["TITLE", "AUTHORS"],
             ["TITLE"],
-            # Segmented title combinations (medium precision)
+            
+            # Tier 3: Segmented title combinations (medium-high precision)
             ["TITLE_SEGMENTED", "PUBLICATION_YEAR", "AUTHORS", "JOURNAL"],
             ["TITLE_SEGMENTED", "PUBLICATION_YEAR", "AUTHORS"],
             ["TITLE_SEGMENTED", "PUBLICATION_YEAR", "JOURNAL"],
             ["TITLE_SEGMENTED", "PUBLICATION_YEAR"],
             ["TITLE_SEGMENTED", "AUTHORS"],
             ["TITLE_SEGMENTED"],
-            # NEW: Non-title fallbacks (lower precision)
+            
+            # Tier 4: Bibliographic fingerprint combinations (medium precision)
+            ["AUTHORS", "JOURNAL", "VOLUME", "ISSUE", "PAGE_FIRST", "PUBLICATION_YEAR"],
+            ["JOURNAL", "VOLUME", "ISSUE", "PAGE_FIRST", "PUBLICATION_YEAR"],
+            ["AUTHORS", "JOURNAL", "VOLUME", "PAGE_FIRST", "PUBLICATION_YEAR"],
+            ["JOURNAL", "VOLUME", "PAGE_FIRST", "PUBLICATION_YEAR"],
+            
+            # Tier 5: Author + bibliographic combinations (medium precision)
             ["AUTHORS", "PUBLICATION_YEAR", "JOURNAL", "VOLUME", "PAGE_FIRST"],
             ["AUTHORS", "PUBLICATION_YEAR", "JOURNAL", "VOLUME"],
-            ["AUTHORS", "JOURNAL", "VOLUME", "ISSUE", "PAGE_FIRST"], 
-            ["JOURNAL", "PUBLICATION_YEAR", "VOLUME", "ISSUE", "PAGE_FIRST"],
+            ["AUTHORS", "PUBLICATION_YEAR", "JOURNAL", "ISSUE", "PAGE_FIRST"],
             ["AUTHORS", "PUBLICATION_YEAR", "JOURNAL"],
+            
+            # Tier 6: Journal + bibliographic combinations (medium-low precision)
+            ["JOURNAL", "PUBLICATION_YEAR", "VOLUME", "ISSUE", "PAGE_FIRST"],
             ["JOURNAL", "PUBLICATION_YEAR", "VOLUME", "ISSUE"],
+            ["JOURNAL", "PUBLICATION_YEAR", "VOLUME"],
+            
+            # Tier 7: Basic combinations (lower precision)
             ["AUTHORS", "PUBLICATION_YEAR"],
+            ["JOURNAL", "PUBLICATION_YEAR"],
+            ["AUTHORS", "JOURNAL"],
         ],
+        
         "pubmed": [
+            # Tier 1: DOI (highest precision)
             ["DOI"],
-            # Title combinations (high precision)
+            
+            # Tier 2: Title combinations (high precision)
             ["TITLE", "AUTHORS", "JOURNAL", "PUBLICATION_YEAR"],
             ["TITLE", "JOURNAL", "PUBLICATION_YEAR"],
             ["TITLE", "AUTHORS", "PUBLICATION_YEAR"],
             ["TITLE", "PUBLICATION_YEAR"],
+            ["TITLE", "AUTHORS"],
             ["TITLE"],
-            # Non-title fallbacks (lower precision)
+            
+            # Tier 3: Bibliographic fingerprint combinations (medium-high precision)
+            # PubMed is excellent for biomedical journals with volume/issue/page
+            ["AUTHORS", "JOURNAL", "VOLUME", "ISSUE", "PAGE_FIRST", "PUBLICATION_YEAR"],
+            ["JOURNAL", "VOLUME", "ISSUE", "PAGE_FIRST", "PUBLICATION_YEAR"],
+            ["AUTHORS", "JOURNAL", "VOLUME", "PAGE_FIRST", "PUBLICATION_YEAR"],
+            ["JOURNAL", "VOLUME", "PAGE_FIRST", "PUBLICATION_YEAR"],
+            
+            # Tier 4: Author + journal combinations (medium precision)
+            ["AUTHORS", "JOURNAL", "PUBLICATION_YEAR", "VOLUME"],
             ["AUTHORS", "JOURNAL", "PUBLICATION_YEAR", "PAGE_FIRST"],
-            ["JOURNAL", "PUBLICATION_YEAR", "VOLUME", "PAGE_FIRST"],
             ["AUTHORS", "JOURNAL", "PUBLICATION_YEAR"],
+            
+            # Tier 5: Journal + bibliographic combinations (medium-low precision)
+            ["JOURNAL", "PUBLICATION_YEAR", "VOLUME", "ISSUE"],
             ["JOURNAL", "PUBLICATION_YEAR", "VOLUME"],
+            ["JOURNAL", "PUBLICATION_YEAR", "PAGE_FIRST"],
+            
+            # Tier 6: Basic combinations (lower precision)
             ["AUTHORS", "PUBLICATION_YEAR"],
+            ["JOURNAL", "PUBLICATION_YEAR"],
         ],
+        
         "openaire": [
+            # Tier 1: DOI (highest precision)
             ["DOI"],
-            # Title combinations (high precision)
+            
+            # Tier 2: Title combinations (high precision)
             ["TITLE", "AUTHORS", "PUBLICATION_YEAR"],
             ["TITLE", "PUBLICATION_YEAR"],
             ["TITLE", "AUTHORS"],
             ["TITLE"],
-            # Segmented title combinations (middle precision)
+            
+            # Tier 3: Segmented title combinations (medium precision)
             ["TITLE_SEGMENTED", "AUTHORS", "PUBLICATION_YEAR"],
             ["TITLE_SEGMENTED", "PUBLICATION_YEAR"],
             ["TITLE_SEGMENTED", "AUTHORS"],
             ["TITLE_SEGMENTED"],
-            # Non-title fallback (lower precision)
+            
+            # Tier 4: Non-title combinations (lower precision)
+            # OpenAIRE has limited bibliographic search capabilities
             ["AUTHORS", "PUBLICATION_YEAR"],
         ],
+        
         "crossref": [
+            # Tier 1: DOI (highest precision)
             ["DOI"],
-            # Title combinations (high precision)
+            
+            # Tier 2: Title combinations (high precision)
             ["TITLE", "AUTHORS", "PUBLICATION_YEAR"],
             ["TITLE", "PUBLICATION_YEAR"],
             ["TITLE", "AUTHORS"],
             ["TITLE"],
-            # Non-title fallbacks (lower precision)
+            
+            # Tier 3: Non-title combinations (lower precision)
+            # CrossRef search is more limited for bibliographic details
             ["AUTHORS", "PUBLICATION_YEAR"],
             ["JOURNAL", "PUBLICATION_YEAR"],  # Using container-title
         ],
+        
         "hal": [
+            # Tier 1: DOI (highest precision)
             ["DOI"],
-            # Title combinations (high precision)
+            
+            # Tier 2: Title combinations (high precision)
             ["TITLE", "AUTHORS", "PUBLICATION_YEAR", "JOURNAL"],
             ["TITLE", "AUTHORS", "PUBLICATION_YEAR"],
             ["TITLE", "PUBLICATION_YEAR", "JOURNAL"],
             ["TITLE", "PUBLICATION_YEAR"],
+            ["TITLE", "AUTHORS"],
             ["TITLE"],
-            # Non-title fallbacks (lower precision)
+            
+            # Tier 3: Bibliographic fingerprint combinations (medium precision)
+            # HAL supports good bibliographic search
+            ["AUTHORS", "JOURNAL", "VOLUME", "ISSUE", "PAGE_FIRST", "PUBLICATION_YEAR"],
+            ["JOURNAL", "VOLUME", "ISSUE", "PAGE_FIRST", "PUBLICATION_YEAR"],
+            ["AUTHORS", "JOURNAL", "VOLUME", "PAGE_FIRST", "PUBLICATION_YEAR"],
+            ["JOURNAL", "VOLUME", "PAGE_FIRST", "PUBLICATION_YEAR"],
+            
+            # Tier 4: Author + journal combinations (medium precision)
+            ["AUTHORS", "JOURNAL", "PUBLICATION_YEAR", "VOLUME"],
             ["AUTHORS", "JOURNAL", "PUBLICATION_YEAR", "PAGE_FIRST"],
-            ["JOURNAL", "PUBLICATION_YEAR", "VOLUME", "ISSUE", "PAGE_FIRST"],
             ["AUTHORS", "JOURNAL", "PUBLICATION_YEAR"],
+            
+            # Tier 5: Journal + bibliographic combinations (medium-low precision)
+            ["JOURNAL", "PUBLICATION_YEAR", "VOLUME", "ISSUE", "PAGE_FIRST"],
             ["JOURNAL", "PUBLICATION_YEAR", "VOLUME", "ISSUE"],
+            ["JOURNAL", "PUBLICATION_YEAR", "VOLUME"],
+            
+            # Tier 6: Basic combinations (lower precision)
             ["AUTHORS", "PUBLICATION_YEAR"],
+            ["JOURNAL", "PUBLICATION_YEAR"],
         ]
     }
     

@@ -13,6 +13,9 @@ from collections import defaultdict
 from .api_capabilities import APICapabilities
 from .field_mapper import FieldMapper, DOIResult
 
+PER_PAGE_SPECIFIC = 5
+PER_PAGE_BROAD = 10
+
 class ResultDeduplicator:
     """Handles deduplication of search results across different strategies with multiple DOI support"""
     
@@ -82,10 +85,11 @@ class ProgressiveSearchStrategy:
     """Implements target-based progressive search with API-specific retry configurations and clean output"""
     
     def __init__(self, field_mapper: FieldMapper, deduplicator: 'ResultDeduplicator', 
-                 default_target_count: int = 10):
+                 default_target_count: int = 10, debug: bool = False):
         self.field_mapper = field_mapper
         self.deduplicator = deduplicator
         self.default_target_count = default_target_count
+        self.debug = debug
         
         # Track API call timing to respect rate limits
         self.last_api_call_time = {}
@@ -126,10 +130,15 @@ class ProgressiveSearchStrategy:
             return True
         else:
             return False
-    
+        
     def _execute_search_with_retry(self, query_params: Dict[str, Any], api: str, 
-                                 combination: List[str], strategy_instance: Any) -> List[Dict]:
-        """Execute search with API-specific retry configuration - clean output"""
+                                 combination: List[str], strategy_instance: Any, per_page: int = 1) -> List[Dict]:
+        """Execute search with API-specific retry configuration and debugging"""
+        
+        if self.debug:
+            print(f"\n--- Executing {api} search ---")
+            print(f"Field combination: {combination}")
+            print(f"Query params: {query_params}")
         
         # Get API-specific configuration
         config = self._get_api_retry_config(api)
@@ -141,176 +150,281 @@ class ProgressiveSearchStrategy:
                 
                 # Build API URL
                 if hasattr(strategy_instance, '_build_api_url'):
-                    api_url = strategy_instance._build_api_url(query_params)                   
+                    api_url = strategy_instance._build_api_url(query_params, per_page)
+                    
+                    if self.debug:
+                        print(f"API URL (attempt {attempt + 1}): {api_url}")
                 else:
+                    if self.debug:
+                        print(f"ERROR: Strategy has no _build_api_url method")
                     return []
                 
                 # Make the request with API-specific timeout
+                if self.debug:
+                    print(f"Making HTTP request with timeout {config.timeout}s...")
+                
                 response = requests.get(api_url, timeout=config.timeout)
                 
+                if self.debug:
+                    print(f"Response status: {response.status_code}")
+                    print(f"Response size: {len(response.content)} bytes")
+                
                 if response.status_code == 200:
-                    results = self._parse_api_response(response, api)
+                    results = strategy_instance.parse_response(response)
+                    
+                    if self.debug:
+                        print(f"Parsed {len(results)} results from response")
+                        if results and api != "pubmed":  # Don't print XML
+                            for i, result in enumerate(results[:3]):  # Show first 3
+                                if isinstance(result, dict):
+                                    title = str(result.get('title', result.get('name', 'No title')))[:60]
+                                    print(f"  Result {i}: {title}...")
+                    
                     return results
                 else:
+                    if self.debug:
+                        print(f"HTTP error {response.status_code}: {response.text[:200]}...")
+                    
                     # Don't retry on client errors (4xx)
                     if 400 <= response.status_code < 500:
-                        print(f"Received error {response.status_code} from {api}. Skipping request without retry.")
+                        if self.debug:
+                            print(f"Client error - not retrying")
                         return []
                     
                     # Retry on server errors (5xx)
                     if attempt < config.max_retries - 1:
-                        print(f"Received error {response.status_code} from {api}. Retrying...")
                         delay = self._calculate_delay(attempt, api, config)
+                        if self.debug:
+                            print(f"Server error - retrying in {delay:.1f}s...")
                         time.sleep(delay)
                         continue
                     else:
-                        print(f"Received error {response.status_code} from {api}. Skipping request after all retry attempts failed.")
+                        if self.debug:
+                            print(f"Max retries reached")
                         return []
                     
             except requests.exceptions.Timeout as e:
+                if self.debug:
+                    print(f"Timeout error: {e}")
                 if attempt < config.max_retries - 1:
                     delay = self._calculate_delay(attempt, api, config)
+                    if self.debug:
+                        print(f"Retrying in {delay:.1f}s...")
                     time.sleep(delay)
                     continue
                 else:
+                    if self.debug:
+                        print(f"Max retries reached after timeout")
                     return []
                     
             except requests.exceptions.ConnectionError as e:
+                if self.debug:
+                    print(f"Connection error: {e}")
                 if attempt < config.max_retries - 1:
                     delay = self._calculate_delay(attempt, api, config)
+                    if self.debug:
+                        print(f"Retrying in {delay:.1f}s...")
                     time.sleep(delay)
                     continue
                 else:
-                    return []
-                    
-            except requests.exceptions.RequestException as e:
-                if self._is_retryable_error(e) and attempt < config.max_retries - 1:
-                    delay = self._calculate_delay(attempt, api, config)
-                    time.sleep(delay)
-                    continue
-                else:
+                    if self.debug:
+                        print(f"Max retries reached after connection error")
                     return []
                     
             except Exception as e:
+                if self.debug:
+                    print(f"Unexpected error: {e}")
                 return []
         
         return []
     
-    def _parse_api_response(self, response: requests.Response, api: str) -> List[Dict]:
-        """Parse API response based on API type with comprehensive error handling"""
-        try:
-            if api == "pubmed":
-                return [response.text] if response.text else []
-            
-            try:
-                data = response.json()
-            except (ValueError, requests.exceptions.JSONDecodeError):
-                return []
-            
-            if data is None:
-                return []
-            
-            if api == "openalex":
-                results = data.get("results", [])
-                return results if isinstance(results, list) else []
-                
-            elif api == "openaire":
-                results = data.get("results")
-                if results is None:
-                    return []
-                return results if isinstance(results, list) else []
-                    
-            elif api == "crossref":
-                message = data.get("message")
-                if message is None:
-                    return []
-                items = message.get("items", [])
-                return items if isinstance(items, list) else []
-                
-            elif api == "hal":
-                response_data = data.get("response")
-                if response_data is None:
-                    return []
-                docs = response_data.get("docs", [])
-                return docs if isinstance(docs, list) else []
-            
-            else:
-                return []
-            
-        except Exception as e:
-            return []
-    
     def search_with_target(self, ner_entities: Dict[str, List[str]], api: str, 
                           target_count: Optional[int] = None, 
                           strategy_instance: Any = None) -> List[Dict]:
-        """Perform progressive search with API-specific retry configurations - clean output"""
+        """Perform progressive search with dynamic target adjustment"""
         if target_count is None:
             target_count = self.default_target_count
+        
+        # DYNAMIC TARGET ADJUSTMENT based on available fields
+        has_title = bool(ner_entities.get('TITLE', []))
+        has_bibliographic = any(ner_entities.get(field, []) for field in ['VOLUME', 'ISSUE', 'PAGE_FIRST', 'PAGE_LAST'])
+        has_doi = bool(ner_entities.get('DOI', []))
+        
+        original_target = target_count
+        
+        if not has_title and has_bibliographic:
+            # No title but we have volume/issue/page data - need more combinations
+            target_count = min(target_count * 3, 30)
+            adjustment_reason = "no title but bibliographic data available"
+        elif not has_title and not has_doi:
+            # No title and no DOI - need even more combinations
+            target_count = min(target_count * 2, 25)
+            adjustment_reason = "no title and no DOI"
+        else:
+            adjustment_reason = None
+        
+        if self.debug:
+            print(f"\n=== Progressive Search for {api} ===")
+            print(f"Original target: {original_target}")
+            if adjustment_reason:
+                print(f"Adjusted target to {target_count} ({adjustment_reason})")
+            else:
+                print(f"Using original target: {target_count}")
+        
+        # Keep track of already performed queries to avoid repeating them.
+        seen_query_params = set()
         
         # Get API-specific configurations
         search_capabilities = APICapabilities.get_search_fields(api)
         field_combinations = APICapabilities.get_field_combinations(api)
         
         if not search_capabilities or not field_combinations:
+            if self.debug:
+                print(f"ERROR: No search capabilities or field combinations for {api}")
             return []
         
-        all_candidates = []
+        if self.debug:
+            print(f"Available field combinations: {len(field_combinations)}")
         
-        for combination in field_combinations:
+        all_candidates = []
+        tried_combinations = []
+        
+        for combo_index, combination in enumerate(field_combinations):
             if len(all_candidates) >= target_count:
-                break
+                # SMART STOPPING: Check if we should continue for better precision
+                if not has_title and has_bibliographic:
+                    # Check if we've tried any bibliographic combinations yet
+                    bibliographic_tried = any(
+                        any(field in combo for field in ['VOLUME', 'ISSUE', 'PAGE_FIRST']) 
+                        for combo in tried_combinations
+                    )
+                    
+                    if not bibliographic_tried and combo_index < len(field_combinations) - 3:
+                        if self.debug:
+                            print(f"Target reached but no bibliographic combinations tried yet, continuing...")
+                    else:
+                        if self.debug:
+                            print(f"Target count {target_count} reached, stopping search")
+                        break
+                else:
+                    if self.debug:
+                        print(f"Target count {target_count} reached, stopping search")
+                    break
+            
+            if self.debug:
+                print(f"\n--- Trying combination {combo_index + 1}: {combination} ---")
             
             available_combination = []
             for field in combination:
                 if APICapabilities.supports_field(api, field):
                     # Check if field is available in NER entities
                     if field == "TITLE_SEGMENTED":
-                        # TITLE_SEGMENTED uses TITLE data but with different preprocessing
                         if "TITLE" in ner_entities and ner_entities["TITLE"] and ner_entities["TITLE"][0]:
                             available_combination.append(field)
+                            if self.debug:
+                                print(f"  ✓ {field} (using TITLE data)")
                     elif field in ner_entities and ner_entities[field] and ner_entities[field][0]:
                         available_combination.append(field)
+                        if self.debug:
+                            print(f"  ✓ {field}: {ner_entities[field][0]}")
+                    else:
+                        if self.debug:
+                            print(f"  ✗ {field}: not available in NER")
+                else:
+                    if self.debug:
+                        print(f"  ✗ {field}: not supported by {api}")
             
             if not available_combination:
+                if self.debug:
+                    print(f"  No available fields for this combination, skipping")
                 continue
+
+            # Skip overly broad single-field searches (unless it's a high-value field)
+            if len(available_combination) == 1 and available_combination[0] not in ['DOI', 'TITLE', 'TITLE_SEGMENTED']:
+                if self.debug:
+                    print(f"  Skipping overly broad single-field search: {available_combination}")
+                continue
+
+            tried_combinations.append(available_combination)
+            
+            if self.debug:
+                print(f"  Using fields: {available_combination}")
             
             query_params = self.field_mapper.build_query_params(
                 api, available_combination, ner_entities, search_capabilities
             )
             
             if not query_params:
+                if self.debug:
+                    print(f"  No query parameters generated, skipping")
                 continue
-            
-            # Execute search with API-specific retry configuration
+
+            # Create a hashable representation of query_params for deduplication
+            params_key = tuple(sorted(query_params.items()))
+            if params_key in seen_query_params:
+                if self.debug:
+                    print(f"  Skipping duplicate query parameters")
+                continue
+            seen_query_params.add(params_key)
+
+            # Determine if this is a broad search
+            is_broad_search = (
+                len(available_combination) <= 2 and 
+                not any(field in available_combination for field in ['TITLE', 'DOI'])
+            )
+
+            per_page = PER_PAGE_BROAD if is_broad_search else PER_PAGE_SPECIFIC
+
+            # Execute search with retry configuration
             candidates = self._execute_search_with_retry(
-                query_params, api, available_combination, strategy_instance
+                query_params, api, available_combination, strategy_instance, per_page
             )
             
             if candidates:
                 all_candidates.extend(candidates)
+                if self.debug:
+                    print(f"  Found {len(candidates)} candidates (total: {len(all_candidates)})")
                 
-                if len(candidates) == 1 and len(available_combination) >= 3:
+                # EARLY SUCCESS: Stop if we find a precise result with many fields
+                if (len(candidates) == 1 and len(available_combination) >= 4 and 
+                    any(field in available_combination for field in ['TITLE', 'DOI', 'VOLUME', 'ISSUE', 'PAGE_FIRST'])):
+                    if self.debug:
+                        print(f"  Precise result found with {len(available_combination)} fields, stopping search")
                     break
+            else:
+                if self.debug:
+                    print(f"  No candidates found")
         
-        # Deduplicate all candidates (with multiple DOI awareness)
+        # Deduplicate all candidates
         unique_candidates = self.deduplicator.deduplicate_candidates(all_candidates, api)
         
-        return unique_candidates[:target_count]
+        if self.debug:
+            print(f"\nDeduplication: {len(all_candidates)} → {len(unique_candidates)} unique")
+            print(f"Bibliographic combinations tried: {len([c for c in tried_combinations if any(f in c for f in ['VOLUME', 'ISSUE', 'PAGE_FIRST'])])}")
+        
+        final_results = unique_candidates[:original_target]  # Return original target amount
+        
+        if self.debug:
+            print(f"Final results: {len(final_results)} candidates")
+        
+        return final_results
 
 class SearchOrchestrator:
     """Orchestrates the complete search process across APIs with enhanced DOI support and clean output"""
     
-    def __init__(self, target_count: int = 10):
-        self.field_mapper = FieldMapper()
+    def __init__(self, target_count: int = 10, debug: bool = False):
+        self.field_mapper = FieldMapper(debug=debug)
         self.deduplicator = ResultDeduplicator(self.field_mapper)
         self.progressive_search = ProgressiveSearchStrategy(
             self.field_mapper, self.deduplicator, target_count
         )
+        self.debug = debug
     
     def search_single_api(self, ner_entities: Dict[str, List[str]], api: str, 
-                         target_count: Optional[int] = None, 
+                         target_count: Optional[int] = 1, 
                          strategy_instance: Any = None) -> List[Dict]:
-        """Search a single API with progressive strategy and enhanced DOI support"""
+        """Search a single API with progressive strategy and debugging"""
+        self.progressive_search.debug = self.debug
         return self.progressive_search.search_with_target(
             ner_entities, api, target_count, strategy_instance
         )

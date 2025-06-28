@@ -11,23 +11,13 @@ from .api_capabilities import APICapabilities
 from .field_mapper import FieldMapper, DOIResult
 from .progressive_search import SearchOrchestrator, ProgressiveSearchStrategy, ResultDeduplicator
 
-TIMEOUT = 30
-TARGET_COUNT_SINGLE_API = 1
-TARGET_COUNT_PER_API_ENSEMBLE = 5
-
-print("===================================")
-print("Search parameters")
-print(f"    TIMEOUT={TIMEOUT}")
-print(f"    TARGET_COUNT_SINGLE_API={TARGET_COUNT_SINGLE_API}")
-print(f"    TARGET_COUNT_PER_API_ENSEMBLE={TARGET_COUNT_PER_API_ENSEMBLE}")
-print("===================================")
-
 class BaseAPIStrategy:
     """Base class for API search strategies with enhanced DOI support"""
-    
-    def __init__(self):
-        self.field_mapper = FieldMapper()
+        
+    def __init__(self, debug:bool = False):
+        self.field_mapper = FieldMapper(debug=debug)
         self.deduplicator = ResultDeduplicator(self.field_mapper)
+        self.debug = debug
 
     def encode_query_value(self, value: str, encoding_type: str = "quote") -> str:
         """Encode a query value for URL safety"""
@@ -46,6 +36,10 @@ class BaseAPIStrategy:
             if value is not None and str(value).strip():
                 encoded_params[key] = self.encode_query_value(value, encoding_type)
         return encoded_params
+
+    def parse_response(self, response: requests.Response) -> List[Dict]:
+        """Parse API response into standardized dict format"""
+        raise NotImplementedError("Subclasses must implement parse_response")
 
     def enhance_result_with_dois(self, result: Dict[str, Any], api_name: str) -> Dict[str, Any]:
         """
@@ -105,23 +99,18 @@ class BaseAPIStrategy:
             enhanced_result['supports_multiple_dois'] = False
         
         return enhanced_result
-
-    def search(self, ner_entities: Dict[str, List[str]], target_count: int = TARGET_COUNT_SINGLE_API, **kwargs) -> List[Dict]:
-        """Main search method using progressive strategy with DOI enhancement"""
+           
+    def search(self, ner_entities: Dict[str, List[str]], target_count: int = 1, **kwargs) -> List[Dict]:
+        """Main search method - now just processes results, orchestration handled by SearchAPI"""
         api_name = self.get_api_name()
         
-        # Use progressive search orchestrator
-        orchestrator = SearchOrchestrator(target_count)
-        results = orchestrator.search_single_api(ner_entities, api_name, target_count, self)
+        if self.debug:
+            print(f"\n--- DEBUG: {api_name} Strategy Search ---")
+            print(f"NER entities: {ner_entities}")
         
-        # Enhance all results with DOI information
-        enhanced_results = []
-        #for result in results:
-        for i, result in enumerate(results or []):
-            enhanced_result = self.enhance_result_with_dois(result, api_name)
-            enhanced_results.append(enhanced_result)
-        
-        return enhanced_results
+        # This will be called by SearchOrchestrator, so we don't create another one here
+        # Just indicate that this method should not be called directly
+        raise NotImplementedError("BaseAPIStrategy.search() should not be called directly. Use SearchAPI.search_api() instead.")
     
     def get_api_name(self) -> str:
         """Return the API name for this strategy"""
@@ -136,8 +125,27 @@ class OpenAlexStrategy(BaseAPIStrategy):
     
     def get_api_name(self) -> str:
         return "openalex"
-        
-    def _build_api_url(self, query_params: Dict[str, Any]) -> str:
+
+    def parse_response(self, response: requests.Response) -> List[Dict]:
+        """Parse OpenAlex API response"""
+        try:
+            data = response.json()
+            if data is None:
+                return []
+            
+            results = data.get("results", [])
+            return results if isinstance(results, list) else []
+            
+        except (ValueError, requests.exceptions.JSONDecodeError) as e:
+            if self.debug:
+                print(f"OpenAlex JSON parse error: {e}")
+            return []
+        except Exception as e:
+            if self.debug:
+                print(f"OpenAlex parse error: {e}")
+            return []
+
+    def _build_api_url(self, query_params: Dict[str, Any], per_page: int = 1) -> str:
         """Build OpenAlex API URL from query parameters"""
         base_url = "https://api.openalex.org/works"
         
@@ -162,8 +170,16 @@ class OpenAlexStrategy(BaseAPIStrategy):
                     or_query = "|".join(cleaned_segments)
                     encoded_value = self.encode_query_value(or_query)
                     filter_parts.append(f"{key}:{encoded_value}")
+            
+            elif key in ["biblio.volume", "biblio.issue", "biblio.first_page", "biblio.last_page", "raw_author_name.search"]:
+                # Don't clean bibliographic fields (short numbers) or author surnames (can be short)
+                value_str = str(value).strip()
+                if value_str:  # Just check it's not empty
+                    encoded_value = self.encode_query_value(value_str)
+                    filter_parts.append(f"{key}:{encoded_value}")
+            
             else:
-                # Regular cleaning for non-OR queries
+                # Regular cleaning for non-OR, non-bibliographic queries
                 cleaned_value = self._clean_openalex_filter_value(str(value))
                 if not cleaned_value:
                     continue
@@ -173,53 +189,65 @@ class OpenAlexStrategy(BaseAPIStrategy):
                     filter_parts.append(f"{key}:{encoded_value}")
                 elif key in ["title.search", "raw_author_name.search"]:
                     filter_parts.append(f"{key}:{encoded_value}")
-                elif key in ["publication_year", "doi", "biblio.volume", "biblio.issue", 
-                            "biblio.first_page", "biblio.last_page"]:
+                elif key in ["publication_year", "doi"]:
                     filter_parts.append(f"{key}:{encoded_value}")
         
         if filter_parts:
             filter_string = ",".join(filter_parts)
-            final_url = f"{base_url}?per-page={TARGET_COUNT_SINGLE_API}&filter={filter_string}&mailto=info@sirisacademic.com"
-            #print(f"DEBUG. URL={final_url}")
+            final_url = f"{base_url}?per-page={per_page}&filter={filter_string}&mailto=info@sirisacademic.com"
+            if self.debug:
+                print(f"OpenAlex URL: {final_url}")
             return final_url
         
-        return f"{base_url}?per-page={TARGET_COUNT_SINGLE_API}"
-
+        return f"{base_url}?per-page={per_page}"
 
     def _clean_openalex_filter_value(self, value: str) -> str:
         """Clean filter values for OpenAlex compatibility"""
         if not value:
             return ""
         
-        # Remove problematic characters that cause 403 errors
-        # Keep alphanumeric, spaces, hyphens, and basic punctuation
         import re
         
-        # Remove or replace problematic characters
-        cleaned = value
+        # Remove parentheses and their contents
+        cleaned = re.sub(r'\([^)]*\)', '', value)
         
-        # Remove parentheses and their contents (common in citations)
-        cleaned = re.sub(r'\([^)]*\)', '', cleaned)
+        # Replace problematic punctuation with spaces instead of removing
+        cleaned = re.sub(r'[:/]', ' ', cleaned)  # Replace : and / with spaces
+        cleaned = re.sub(r'[,;\"\'`]', '', cleaned)  # Remove other punctuation
+        cleaned = re.sub(r'[—–]', '-', cleaned)  # Replace em/en dashes
         
-        # Remove or replace other problematic characters
-        cleaned = re.sub(r'[,;:"\'`]', '', cleaned)  # Remove commas, semicolons, quotes
-        cleaned = re.sub(r'[—–]', '-', cleaned)      # Replace em/en dashes with hyphens
-        cleaned = re.sub(r'[^\w\s\-.]', '', cleaned) # Keep only word chars, spaces, hyphens, dots
+        # Keep more characters for scientific terms
+        cleaned = re.sub(r'[^\w\s\-.\(\)]', '', cleaned)
         
         # Normalize whitespace
         cleaned = re.sub(r'\s+', ' ', cleaned).strip()
         
-        # Ensure minimum length for meaningful search
-        if len(cleaned) < 3:
-            return ""
-        
-        return cleaned
+        return cleaned if len(cleaned) >= 3 else ""
 
 class OpenAIREStrategy(BaseAPIStrategy):
     def get_api_name(self) -> str:
         return "openaire"
-        
-    def _build_api_url(self, query_params: Dict[str, Any]) -> str:
+
+    def parse_response(self, response: requests.Response) -> List[Dict]:
+        """Parse OpenAIRE API response"""
+        try:
+            data = response.json()
+            if data is None:
+                return []
+            
+            results = data.get("results", [])
+            return results if isinstance(results, list) else []
+            
+        except (ValueError, requests.exceptions.JSONDecodeError) as e:
+            if self.debug:
+                print(f"OpenAIRE JSON parse error: {e}")
+            return []
+        except Exception as e:
+            if self.debug:
+                print(f"OpenAIRE parse error: {e}")
+            return []
+
+    def _build_api_url(self, query_params: Dict[str, Any], per_page: int = 1) -> str:
         """Build OpenAIRE Graph API URL from query parameters"""
         base_url = "https://api.openaire.eu/graph/v1/researchProducts"
         
@@ -239,20 +267,20 @@ class OpenAIREStrategy(BaseAPIStrategy):
         if encoded_params:
             params_list = [f"{key}={value}" for key, value in encoded_params.items()]
             query_string = "&".join(params_list)
-            final_url = f"{base_url}?{query_string}&pageSize={TARGET_COUNT_SINGLE_API}"
+            final_url = f"{base_url}?{query_string}&pageSize={per_page}"
             #print(f"DEBUG. URL={final_url}")
             return final_url
         
-        return f"{base_url}?pageSize={TARGET_COUNT_SINGLE_API}"
+        return f"{base_url}?pageSize={per_page}"
 
 class PubMedStrategy(BaseAPIStrategy):
-    """PubMed API search strategy with XML parsing to dict structure"""
+    """PubMed API search strategy with custom two-step process"""
     
     def get_api_name(self) -> str:
         return "pubmed"
     
-    def _build_api_url(self, query_params: Dict[str, Any]) -> str:
-        """Build PubMed API URL from query parameters"""
+    def _build_api_url(self, query_params: Dict[str, Any], per_page: int = 1) -> str:
+        """Build PubMed search URL (step 1 - get PMIDs)"""
         search_url = "http://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi"
         
         # Build search term from field parameters
@@ -261,29 +289,89 @@ class PubMedStrategy(BaseAPIStrategy):
             if not value:
                 continue
                 
-            # Encode the value for URL safety
-            encoded_value = self.encode_query_value(value)
-            
+            # DON'T encode here - use raw values
             if key == "doi":
-                term_parts.append(f"{encoded_value}[doi]")
+                term_parts.append(f"{value}[doi]")
             elif key in ["title", "author", "journal", "pdat", "volume", "issue", "first_page", "last_page"]:
-                term_parts.append(f"{encoded_value}[{key}]")
+                term_parts.append(f"{value}[{key}]")
         
         if term_parts:
             search_term = " AND ".join(term_parts)
-            # Double encode the complete search term since it contains special characters like [, ], AND
+            # Only encode once, at the end
             encoded_search_term = self.encode_query_value(search_term, "quote_plus")
-            final_url = f"{search_url}?db=pubmed&retmode=json&retmax={TARGET_COUNT_SINGLE_API}&term={encoded_search_term}"
-            #print(f"DEBUG. URL={final_url}")
+            final_url = f"{search_url}?db=pubmed&retmode=json&retmax={per_page}&term={encoded_search_term}"
             return final_url
         
-        return f"{search_url}?db=pubmed&retmode=json&retmax={TARGET_COUNT_SINGLE_API}"
+        return f"{search_url}?db=pubmed&retmode=json&retmax={per_page}"
+    
+    def parse_response(self, response: requests.Response) -> List[Dict]:
+        """Handle PubMed's two-step process: search for PMIDs, then fetch articles"""
+        try:
+            # Step 1: Parse search response to get PMIDs
+            data = response.json()
+            pmids = data.get("esearchresult", {}).get("idlist", [])
+            
+            if not pmids:
+                if self.debug:
+                    print("No PMIDs found in search response")
+                return []
+            
+            if self.debug:
+                print(f"Found {len(pmids)} PMIDs, fetching articles...")
+            
+            # Step 2: Fetch and parse articles
+            return self._fetch_and_parse_articles(pmids)
+            
+        except (ValueError, requests.exceptions.JSONDecodeError) as e:
+            if self.debug:
+                print(f"PubMed JSON parse error: {e}")
+            return []
+        except Exception as e:
+            if self.debug:
+                print(f"PubMed parse error: {e}")
+            return []
+    
+    def _fetch_and_parse_articles(self, pmids: List[str]) -> List[Dict]:
+        """Fetch full PubMed articles for given PMIDs and parse to dicts"""
+        fetch_url = "http://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi"
+        parsed_articles = []
+        
+        try:
+            for pmid in pmids[:20]:  # Limit to avoid timeouts
+                if self.debug:
+                    print(f"Fetching article for PMID: {pmid}")
+                
+                fetch_params = {
+                    "db": "pubmed",
+                    "retmode": "xml",
+                    "id": pmid,
+                }
+                
+                fetch_response = requests.get(fetch_url, params=fetch_params, timeout=60)
+                fetch_response.raise_for_status()
+                
+                if fetch_response.text:
+                    parsed_article = self._parse_pubmed_xml_to_dict(fetch_response.text)
+                    if parsed_article:
+                        parsed_articles.append(parsed_article)
+                        if self.debug:
+                            title = parsed_article.get('title', 'No title')[:50]
+                            print(f"  Parsed: {title}...")
+                
+                # Small delay to be respectful to NCBI
+                time.sleep(0.1)
+                
+        except Exception as e:
+            if self.debug:
+                print(f"Error fetching PubMed articles: {e}")
+        
+        if self.debug:
+            print(f"Successfully parsed {len(parsed_articles)} PubMed articles")
+        
+        return parsed_articles
     
     def _parse_pubmed_xml_to_dict(self, xml_content: str) -> Dict[str, Any]:
-        """
-        Parse PubMed XML content into standardized dict structure
-        Returns dict with fields consistent with other APIs
-        """
+        """Parse PubMed XML content into standardized dict structure"""
         try:
             import xml.etree.ElementTree as ET
             root = ET.fromstring(xml_content)
@@ -392,127 +480,45 @@ class PubMedStrategy(BaseAPIStrategy):
             return result
             
         except Exception as e:
+            if self.debug:
+                print(f"Error parsing PubMed XML: {e}")
             # Return minimal dict with original XML on parse error
             return {
                 'xml_content': xml_content,
                 'api_source': 'pubmed',
                 'parse_error': str(e)
             }
-    
-    def search(self, ner_entities: Dict[str, List[str]], target_count: int = TARGET_COUNT_SINGLE_API, **kwargs) -> List[Dict]:
-        """Override search for PubMed's two-step process with XML parsing to dict structure"""
-        api_name = self.get_api_name()
-        search_capabilities = APICapabilities.get_search_fields(api_name)
-        field_combinations = APICapabilities.get_field_combinations(api_name)
-        
-        all_candidates = []
-        
-        for combination in field_combinations:
-            if len(all_candidates) >= target_count:
-                break
-            
-            # Filter combination to available fields
-            available_combination = [
-                field for field in combination 
-                if field in ner_entities and ner_entities[field] and ner_entities[field][0]
-                and APICapabilities.supports_field(api_name, field)
-            ]
-            
-            if not available_combination:
-                continue
-            
-            # Build query parameters
-            query_params = self.field_mapper.build_query_params(
-                api_name, available_combination, ner_entities, search_capabilities
-            )
-            
-            if not query_params:
-                continue
-            
-            # Execute PubMed search and fetch, then parse XML
-            xml_results = self._execute_pubmed_search(query_params)
-            
-            # Parse each XML result into dict structure
-            for xml_content in xml_results:
-                if xml_content:  # Skip empty results
-                    parsed_dict = self._parse_pubmed_xml_to_dict(xml_content)
-                    if parsed_dict:
-                        all_candidates.append(parsed_dict)
-        
-        # Deduplicate using standard logic (now works with dict structure)
-        unique_candidates = self.deduplicator.deduplicate_candidates(all_candidates, api_name)
-        limited_candidates = unique_candidates[:target_count]
-        
-        # Enhance results with DOI information
-        enhanced_results = []
-        for result in limited_candidates:
-            enhanced_result = self.enhance_result_with_dois(result, api_name)
-            enhanced_results.append(enhanced_result)
-        
-        return enhanced_results
-    
-    def _execute_pubmed_search(self, query_params: Dict[str, Any]) -> List[str]:
-        """Execute PubMed's two-step search and fetch process - returns XML strings"""
-        search_url = "http://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi"
-        fetch_url = "http://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi"
-        
-        # Build search term
-        term_parts = []
-        for key, value in query_params.items():
-            if key == "doi":
-                term_parts.append(f"{value}[doi]")
-            else:
-                term_parts.append(f"{value}[{key}]")
-        
-        search_term = " AND ".join(term_parts)
-        
-        try:
-            # Step 1: Search for PMIDs
-            search_params = {
-                "db": "pubmed",
-                "retmode": "json",
-                "retmax": 100,
-                "term": search_term,
-            }
-            
-            search_response = requests.get(search_url, params=search_params, timeout=TIMEOUT)
-            search_response.raise_for_status()
-            search_results = search_response.json()
-            
-            pmids = search_results.get("esearchresult", {}).get("idlist", [])
-            if not pmids:
-                return []
-            
-            # Step 2: Fetch individual records (one by one to avoid huge XML)
-            xml_results = []
-            for pmid in pmids[:20]:  # Limit to avoid timeouts
-                fetch_params = {
-                    "db": "pubmed",
-                    "retmode": "xml",
-                    "id": pmid,
-                }
-                
-                fetch_response = requests.get(fetch_url, params=fetch_params, timeout=TIMEOUT)
-                fetch_response.raise_for_status()
-                
-                if fetch_response.text:
-                    xml_results.append(fetch_response.text)
-                
-                # Small delay to be respectful to NCBI
-                time.sleep(0.1)
-            
-            return xml_results
-            
-        except Exception as e:
-            return []
 
 class CrossRefStrategy(BaseAPIStrategy):
     """CrossRef API search strategy with enhanced DOI support"""
     
     def get_api_name(self) -> str:
         return "crossref"
-    
-    def _build_api_url(self, query_params: Dict[str, Any]) -> str:
+
+    def parse_response(self, response: requests.Response) -> List[Dict]:
+        """Parse CrossRef API response"""
+        try:
+            data = response.json()
+            if data is None:
+                return []
+            
+            message = data.get("message")
+            if message is None:
+                return []
+            
+            items = message.get("items", [])
+            return items if isinstance(items, list) else []
+            
+        except (ValueError, requests.exceptions.JSONDecodeError) as e:
+            if self.debug:
+                print(f"CrossRef JSON parse error: {e}")
+            return []
+        except Exception as e:
+            if self.debug:
+                print(f"CrossRef parse error: {e}")
+            return []
+
+    def _build_api_url(self, query_params: Dict[str, Any], per_page: int = 1) -> str:
         """Build CrossRef API URL from query parameters"""
         base_url = "https://api.crossref.org/works"
         
@@ -522,19 +528,42 @@ class CrossRefStrategy(BaseAPIStrategy):
         if encoded_params:
             params_list = [f"{key}={value}" for key, value in encoded_params.items()]
             query_string = "&".join(params_list)
-            final_url = f"{base_url}?{query_string}&rows={TARGET_COUNT_SINGLE_API}"
+            final_url = f"{base_url}?{query_string}&rows={per_page}"
             #print(f"DEBUG. URL={final_url}")
             return final_url
         
-        return f"{base_url}?rows={TARGET_COUNT_SINGLE_API}"
+        return f"{base_url}?rows={per_page}"
 
 class HALSearchStrategy(BaseAPIStrategy):
     """HAL API search strategy with enhanced DOI support"""
     
     def get_api_name(self) -> str:
         return "hal"
-    
-    def _build_api_url(self, query_params: Dict[str, Any]) -> str:
+
+    def parse_response(self, response: requests.Response) -> List[Dict]:
+        """Parse HAL API response"""
+        try:
+            data = response.json()
+            if data is None:
+                return []
+            
+            response_data = data.get("response")
+            if response_data is None:
+                return []
+            
+            docs = response_data.get("docs", [])
+            return docs if isinstance(docs, list) else []
+            
+        except (ValueError, requests.exceptions.JSONDecodeError) as e:
+            if self.debug:
+                print(f"HAL JSON parse error: {e}")
+            return []
+        except Exception as e:
+            if self.debug:
+                print(f"HAL parse error: {e}")
+            return []
+
+    def _build_api_url(self, query_params: Dict[str, Any], per_page: int = 1) -> str:
         """Build HAL API URL from query parameters"""
         base_url = "https://api.archives-ouvertes.fr/search/"
         
@@ -554,38 +583,34 @@ class HALSearchStrategy(BaseAPIStrategy):
             query_string = " AND ".join(query_parts)
             # Only encode once - the complete query string
             encoded_query = self.encode_query_value(query_string, "quote_plus")
-            final_url = f"{base_url}?q={encoded_query}&fl=*&wt=json&rows={TARGET_COUNT_SINGLE_API}"
+            final_url = f"{base_url}?q={encoded_query}&fl=*&wt=json&rows={per_page}"
             #print(f"DEBUG. URL={final_url}")
             return final_url
         
-        return f"{base_url}?fl=*&wt=json&rows={TARGET_COUNT_SINGLE_API}"
+        return f"{base_url}?fl=*&wt=json&rows={per_page}"
 
 class SearchAPI:
     """Main search API coordinator with enhanced DOI support and reduced verbosity"""
     
-    def __init__(self):
+    def __init__(self, debug: bool = False):
         self.strategies = {
-            "openalex": OpenAlexStrategy(),
-            "openaire": OpenAIREStrategy(),
-            "pubmed": PubMedStrategy(),
-            "crossref": CrossRefStrategy(),
-            "hal": HALSearchStrategy(),
+            "openalex": OpenAlexStrategy(debug=debug),
+            "openaire": OpenAIREStrategy(debug=debug),
+            "pubmed": PubMedStrategy(debug=debug),
+            "crossref": CrossRefStrategy(debug=debug),
+            "hal": HALSearchStrategy(debug=debug),
         }
-        self.orchestrator = SearchOrchestrator()
-    
+        self.debug = debug
+        self.orchestrator = SearchOrchestrator(debug=debug)
+           
     def search_api(self, ner_entities: Dict[str, List[str]], api: str = "openalex", 
-                  target_count: int = TARGET_COUNT_SINGLE_API, **kwargs) -> List[Dict]:
-        """
-        Search using progressive strategy with target candidate count and enhanced DOI support.
+                  target_count: int = 1, **kwargs) -> List[Dict]:
         
-        Args:
-            ner_entities: Dictionary containing extracted NER entities
-            api: API name (e.g., "openalex", "openaire")
-            target_count: Target number of candidates to retrieve
-            
-        Returns:
-            List of candidates up to target_count, each enhanced with DOI information
-        """
+        if self.debug:
+            print(f"\n=== DEBUG: SearchAPI.search_api for {api} ===")
+            print(f"NER entities: {ner_entities}")
+            print(f"Target count: {target_count}")
+        
         if api not in self.strategies:
             raise ValueError(f"Unsupported API: {api}")
         
@@ -593,12 +618,25 @@ class SearchAPI:
             raise ValueError(f"API {api} not configured in APICapabilities")
         
         strategy = self.strategies[api]
-        results = strategy.search(ner_entities, target_count=target_count, **kwargs)
+        strategy.debug = self.debug
         
-        return results
+        # Use the orchestrator to do the actual search
+        self.orchestrator.debug = self.debug
+        results = self.orchestrator.search_single_api(ner_entities, api, target_count, strategy)
+        
+        # Enhance results with DOI information
+        enhanced_results = []
+        for i, result in enumerate(results or []):
+            enhanced_result = strategy.enhance_result_with_dois(result, api)
+            enhanced_results.append(enhanced_result)
+        
+        if self.debug:
+            print(f"Search returned {len(enhanced_results)} results")
+        
+        return enhanced_results
            
     def search_multiple_apis(self, ner_entities: Dict[str, List[str]], 
-                           apis: List[str], target_count_per_api: int = TARGET_COUNT_PER_API_ENSEMBLE) -> Dict[str, List[Dict]]:
+                           apis: List[str], target_count_per_api: int = 5) -> Dict[str, List[Dict]]:
         """Search multiple APIs and return results by API with enhanced DOI support"""
         return self.orchestrator.search_multiple_apis(
             ner_entities, apis, target_count_per_api, self.strategies

@@ -7,25 +7,20 @@ This document provides an overview of the evaluation results for the References 
 - **Total Citations Evaluated**: 200
 - **APIs Tested**: OpenAlex, OpenAIRE, PubMed, CrossRef, HAL
 - **Evaluation Mode**: Strict
-- **Evaluation Date**: June 23, 2025
+- **Evaluation Date**: June 28, 2025
 
 ## Performance Summary
 
-Thresholds: 0.80 pairwise model / 0.70 entity-based similarity
+Thresholds: 0.90 pairwise model / 0.60 entity-based similarity
 
 | API | Accuracy | Total | Correct | Matches | No Results | Incorrect | Wrong Links | Missing | False Positives |
 |-----|----------|-------|---------|---------|------------|-----------|-------------|---------|-----------------|
-| **OpenAlex** | 67.5% | 200 | 135 | 103 | 32 | 65 | 7 | 56 | 2 |
-| **OpenAIRE** | 65.0% | 200 | 130 | 94 | 36 | 70 | 8 | 59 | 3 |
-| **PubMed** | 76.0% | 200 | 152 | 29 | 123 | 48 | 2 | 34 | 12 |
-| **CrossRef** | 63.5% | 200 | 127 | 91 | 36 | 73 | 8 | 61 | 4 |
-| **HAL** | 98.5% | 200 | 197 | 0 | 197 | 3 | 0 | 0 | 3 |
-| **Ensemble** | 62.5% | 200 | 125 | 86 | 39 | 75 | 6 | 68 | 1 |
-
-**See the detailed results for different thresholds in the following folders:**
-
-- [Thresholds: 0.80 pairwise model / 0.70 entity-based similarity](evaluation_results-thresholds-75_65)
-- [Thresholds: 0.75 pairwise model / 0.65 entity-based similarity](evaluation_results-thresholds-80_70)
+| **Openalex** | 80% | 200    160 | 136 |  24 |   40 |   19 |   17 |  4 |  
+| **Openaire** | 68% | 197    134 | 106 |  28 |   63 |   26 |   26 |  11 | 
+| **Pubmed** |   63% | 200    125 | 46 |   79 |   75 |   8 |    11 |  56 | 
+| **Crossref** | 59% | 200    118 | 93 |   25 |   82 |   42 |   30 |  10 | 
+| **HAL** |  | 97% | 200    193 | 0 |    193 |  7 |    0 |    0 |   7 |  
+| **Ensemble** | 76% | 200    151 | 126 |  25 |   49 |   24 |   15 |  10 | 
 
 ## Key Findings
 
@@ -38,12 +33,6 @@ Thresholds: 0.80 pairwise model / 0.70 entity-based similarity
 - **CrossRef**: Conservative approach, no positive matches in test set
 - **Ensemble**: Combines multiple APIs but shows room for improvement in current implementation
 
-### Error Analysis
-
-- **Missing Papers (I_Miss)**: OpenAIRE (59) and OpenAlex (56) have the highest rates of missing expected citations, though these are also the APIs with the most gold standard IDs in the test set
-- **False Positives (I_Spur)**: PubMed (12) and CrossRef (12) show the highest false positive rates
-- **Wrong Links (I_Match)**: Generally low across all APIs, indicating good precision when matches are found
-
 ## Methodology
 
 The evaluation uses a **strict classification approach** with the following metrics:
@@ -53,13 +42,6 @@ The evaluation uses a **strict classification approach** with the following metr
 - **Wrong Links**: Citations linked to incorrect database records
 - **Missing**: Expected citations that were not found
 - **False Positives**: Unexpected citations returned when none were expected
-
-## Usage Recommendations
-
-- **For biomedical literature**: Use PubMed for highest accuracy
-- **For French academic content**: HAL provides exceptional accuracy
-- **For general academic content**: OpenAlex offers the best balance of coverage and accuracy
-- **For comprehensive coverage**: Consider ensemble approach with improved voting mechanisms
 
 ## Evaluation Data
 
